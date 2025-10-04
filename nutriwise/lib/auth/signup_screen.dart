@@ -4,6 +4,7 @@ import 'package:nutriwise/auth/goal_setup_screen.dart';
 import 'package:nutriwise/auth/plan_setup.dart';
 import 'package:nutriwise/services/auth_services.dart';
 import 'package:nutriwise/auth/auth_wrapper.dart';
+import 'package:local_auth/local_auth.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({Key? key}) : super(key: key);
@@ -188,6 +189,30 @@ class _SignupScreenState extends State<SignupScreen> {
         );
         if (user == null) {
           _showErrorSnackBar('Signup failed.');
+          setState(() {
+            _isLoading = false;
+          });
+          return;
+        }
+
+        // Biometric authentication after registration
+        final LocalAuthentication auth = LocalAuthentication();
+        bool isSupported = await auth.isDeviceSupported();
+        final biometrics = await auth.getAvailableBiometrics();
+        bool didAuthenticate = false;
+        if (isSupported && biometrics.isNotEmpty) {
+          try {
+            didAuthenticate = await auth.authenticate(
+              localizedReason: 'Please use fingerprint or Face ID to complete signup.',
+              options: const AuthenticationOptions(biometricOnly: true),
+            );
+          } catch (e) {
+            print('[DEBUG] Biometric authentication error: $e');
+          }
+        }
+        if (!didAuthenticate) {
+          _showErrorSnackBar('Biometric authentication required. Please use fingerprint or Face ID.');
+          await _authService.signOut();
           setState(() {
             _isLoading = false;
           });
@@ -1085,7 +1110,7 @@ class _SignupScreenState extends State<SignupScreen> {
                           child: Text(
                             '$feetValue ft',
                             style: TextStyle(
-                              fontSize: isSelected ? 24 : 20,
+                              fontSize: isSelected ? 36 : 28,
                               fontWeight: isSelected
                                   ? FontWeight.bold
                                   : FontWeight.w500,

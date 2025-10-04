@@ -12,9 +12,13 @@ class AuthWrapper extends StatelessWidget {
     final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     if (doc.exists) {
       final data = doc.data();
+      if (data == null) {
+        // Defensive: doc exists but no data
+        return {'name': 'User', 'dailyCalories': 0};
+      }
       return {
-        'name': data?['name'] ?? 'User',
-        'dailyCalories': data?['dailyCalories'] ?? 0,
+        'name': data['name'] ?? 'User',
+        'dailyCalories': data['dailyCalories'] ?? 0,
       };
     }
     return {'name': 'User', 'dailyCalories': 0};
