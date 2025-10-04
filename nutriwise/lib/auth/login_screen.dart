@@ -4,6 +4,7 @@ import 'package:nutriwise/auth/overview_screen.dart';
 import 'package:nutriwise/services/auth_services.dart';
 import 'package:nutriwise/auth/forgot_password_screen.dart';
 import 'package:nutriwise/home/home_screen.dart';
+import 'package:local_auth/local_auth.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -46,26 +47,58 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       try {
+        print('[DEBUG] Attempting sign in...');
         final user = await _authService.signIn(
           _emailController.text.trim(),
           _passwordController.text.trim(),
         );
         if (user == null) {
+          print('[DEBUG] Sign in failed: Invalid email or password');
           setState(() {
             _errorMessage = 'Invalid email or password';
             _isLoading = false;
           });
         } else {
-          // Show loader and navigate to HomeScreen after successful login
-          setState(() {
-            _isLoading = true;
-          });
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
-            (route) => false,
-          );
+          print('[DEBUG] Sign in successful, prompting biometrics...');
+          final LocalAuthentication auth = LocalAuthentication();
+          bool isSupported = await auth.isDeviceSupported();
+          print('[DEBUG] Biometrics supported: $isSupported');
+          final biometrics = await auth.getAvailableBiometrics();
+          print('[DEBUG] Available biometrics: $biometrics');
+          bool didAuthenticate = false;
+          if (isSupported && biometrics.isNotEmpty) {
+            try {
+              didAuthenticate = await auth.authenticate(
+                localizedReason: 'Please use fingerprint or Face ID to log in.',
+                options: const AuthenticationOptions(biometricOnly: true),
+              );
+              print('[DEBUG] Biometric authentication result: $didAuthenticate');
+            } catch (e) {
+              print('[DEBUG] Biometric authentication error: $e');
+            }
+          } else {
+            print('[DEBUG] No biometrics available or not supported');
+          }
+          if (didAuthenticate) {
+            print('[DEBUG] Biometrics successful, navigating to HomeScreen');
+            setState(() {
+              _isLoading = false;
+            });
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const HomeScreen()),
+              (route) => false,
+            );
+          } else {
+            print('[DEBUG] Biometrics failed, signing out user');
+            await _authService.signOut();
+            setState(() {
+              _errorMessage = 'Biometric authentication required. Please use fingerprint or Face ID.';
+              _isLoading = false;
+            });
+          }
         }
       } catch (e) {
+        print('[DEBUG] Error during login: $e');
         setState(() {
           _errorMessage = 'Error: ${e.toString()}';
           _isLoading = false;
@@ -107,8 +140,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     color: Color.fromARGB(255, 0, 0, 0),
                   ),
                 ),
-                
-                const SizedBox(height: 60),
+                const SizedBox(height: 12),
+        
+                const SizedBox(height: 20),
                 
                 // Email Field
                 TextFormField(
