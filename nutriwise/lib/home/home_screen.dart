@@ -634,35 +634,37 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   width: 2,
                                                 ),
                                               ),
-                                              child: Column(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  if (isSelected)
-                                                    Text(
-                                                      months[date.month - 1],
-                                                      style: const TextStyle(
-                                                        fontSize: 9,
-                                                        color: Colors.green,
-                                                        fontWeight:
-                                                            FontWeight.w600,
+                                              child: SizedBox(
+                                                width: 36,
+                                                height: 36,
+                                                child: Center(
+                                                  child: Column(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      if (isSelected)
+                                                        Text(
+                                                          months[date.month - 1],
+                                                          style: const TextStyle(
+                                                            fontSize: 8, // reduced from 9
+                                                            color: Colors.green,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                        ),
+                                                      if (isSelected)
+                                                        const SizedBox(height: 1),
+                                                      Text(
+                                                        '${date.day}',
+                                                        style: TextStyle(
+                                                          fontSize: 13, // reduced from 14
+                                                          fontWeight: FontWeight.bold,
+                                                          color: isSelected
+                                                              ? Colors.green
+                                                              : Colors.white,
+                                                        ),
                                                       ),
-                                                    ),
-                                                  if (isSelected)
-                                                    const SizedBox(height: 1),
-                                                  Text(
-                                                    '${date.day}',
-                                                    style: TextStyle(
-                                                      fontSize: 14,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      color: isSelected
-                                                          ? Colors.green
-                                                          : Colors.white,
-                                                    ),
+                                                    ],
                                                   ),
-                                                ],
+                                                ),
                                               ),
                                             ),
                                           ],

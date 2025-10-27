@@ -313,7 +313,6 @@ class _LogFoodModalState extends State<LogFoodModal> {
       {'name': 'QuickMart', 'url': 'quickmart.co.ke'},
       {'name': 'Carrefour Kenya', 'url': 'carrefour.ke'},
       {'name': 'Chandarana', 'url': 'chandarana.com'},
-      {'name': 'Tuskys', 'url': 'tuskys.com'},
       {'name': 'Shoprite Kenya', 'url': 'shoprite.co.ke'},
     ];
 
