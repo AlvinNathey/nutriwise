@@ -3,7 +3,6 @@
  NutriWise is a cross-platform mobile application built with Flutter, designed to help users log, track, and analyze their food intake for improved nutrition and wellness. The app leverages modern AI techniques, including Convolutional Neural Networks (CNN) for image-based food recognition and Retrieval-Augmented Generation (RAG) for enhanced information retrieval and personalized recommendations.
 
  ## Features
-
  - **Barcode Scanning:** Quickly log food items by scanning barcodes using your device's camera.
  - **Image Recognition (CNN):** Identify food items from photos using a trained Convolutional Neural Network, making food logging effortless.
  - **RAG-powered Search:** Retrieve accurate and context-aware nutritional information using Retrieval-Augmented Generation, combining external data sources with generative AI.
