@@ -68,6 +68,7 @@ flutter:
   assets:
     - assets/logo2.png
     - assets/rice-chicken.jpg
+    - assets/nutritional_info.png
 
 flutter_icons:
   android: true

@@ -976,7 +976,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     ),
                   ] else ...[
                     const SizedBox(height: 24),
-                    
+
+                    // --- Move: Orange info box above ---
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(16),
@@ -1008,9 +1009,57 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                         ],
                       ),
                     ),
-                    
+
                     const SizedBox(height: 24),
-                    
+
+                    // --- Nutritional Info Example Card ---
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            Text(
+                              'How to scan nutritional information',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green[800],
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 12),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: SizedBox(
+                                height: 200,
+                                width: 280,
+                                child: Image.asset(
+                                  'assets/nutritional_info.png',
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Make sure to capture the full nutritional label, similar to the example above. The clearer the image, the better the results!',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[800],
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // --- End Added ---
+
                     SizedBox(
                       width: double.infinity,
                       height: 56,
