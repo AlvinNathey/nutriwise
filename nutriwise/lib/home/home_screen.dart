@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:nutriwise/more_screen.dart';
 import 'package:nutriwise/bottom_nav.dart';
-import 'package:nutriwise/log_food.dart';
+import 'package:nutriwise/food/log_food.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math' as math;
 import 'dart:ui';
@@ -457,6 +457,20 @@ class _HomeScreenState extends State<HomeScreen> {
         date.year == selectedDate.year;
   }
 
+  Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return [];
+    final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('barcodes')
+        .where('date', isEqualTo: dateStr)
+        .orderBy('createdAt', descending: true)
+        .get();
+    return snapshot.docs.map((doc) => doc.data()).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -475,19 +489,11 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
         final userDoc = snapshot.data!.data()!;
-        // Use local variables instead of setState
         String userName = userDoc['name'] ?? 'User';
         int dailyGoal = userDoc['calories']?.round() ?? 0;
         int carbsTarget = userDoc['carbG']?.round() ?? 0;
         int proteinTarget = userDoc['proteinG']?.round() ?? 0;
         int fatTarget = userDoc['fatG']?.round() ?? 0;
-        // double userWeight = userDoc['weight']?.toDouble() ?? 0.0;
-        // bool isWeightMetric = userDoc['isWeightMetric'] == true;
-        // Static dummy data for now
-        int caloriesConsumed = 300;
-        int carbsConsumed = 50;
-        int proteinConsumed = 45;
-        int fatConsumed = 30;
 
         return Scaffold(
           backgroundColor: Colors.grey[50],
@@ -507,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: _showWeightDialog,
                     child: Container(
                       decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.15),
+                        color: Colors.green.withOpacity(0.18),
                         borderRadius: BorderRadius.circular(24),
                         border: Border.all(color: Colors.white, width: 1.5),
                         boxShadow: [
@@ -571,103 +577,92 @@ class _HomeScreenState extends State<HomeScreen> {
                                     MainAxisAlignment.spaceEvenly,
                                 children: weekDates.map((date) {
                                   bool isSelected = _isSelectedDate(date);
+                                  bool isFuture = date.isAfter(DateTime.now());
                                   const months = [
-                                    'Jan',
-                                    'Feb',
-                                    'Mar',
-                                    'Apr',
-                                    'May',
-                                    'Jun',
-                                    'Jul',
-                                    'Aug',
-                                    'Sep',
-                                    'Oct',
-                                    'Nov',
-                                    'Dec',
+                                    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec',
                                   ];
                                   return Expanded(
                                     child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          selectedDate = date;
-                                        });
-                                      },
-                                      child: Container(
-                                        margin: const EdgeInsets.symmetric(
-                                          horizontal: 2,
-                                        ),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              _getDayAbbreviation(date),
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: isSelected
-                                                    ? Colors.white
-                                                    : Colors.white70,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Container(
-                                              width: 36,
-                                              height: 36,
-                                              decoration: BoxDecoration(
-                                                color: isSelected
-                                                    ? Colors.white
-                                                    : Colors.transparent,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                  color:
-                                                      date.day ==
-                                                              DateTime.now()
-                                                                  .day &&
-                                                          date.month ==
-                                                              DateTime.now()
-                                                                  .month &&
-                                                          date.year ==
-                                                              DateTime.now()
-                                                                  .year
-                                                      ? Colors.yellow.shade700
-                                                      : Colors.transparent,
-                                                  width: 2,
-                                                ),
-                                              ),
-                                              child: SizedBox(
-                                                width: 36,
-                                                height: 36,
-                                                child: Center(
-                                                  child: Column(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      if (isSelected)
-                                                        Text(
-                                                          months[date.month - 1],
-                                                          style: const TextStyle(
-                                                            fontSize: 8, // reduced from 9
-                                                            color: Colors.green,
-                                                            fontWeight: FontWeight.w600,
-                                                          ),
-                                                        ),
-                                                      if (isSelected)
-                                                        const SizedBox(height: 1),
-                                                      Text(
-                                                        '${date.day}',
-                                                        style: TextStyle(
-                                                          fontSize: 13, // reduced from 14
-                                                          fontWeight: FontWeight.bold,
-                                                          color: isSelected
-                                                              ? Colors.green
-                                                              : Colors.white,
-                                                        ),
-                                                      ),
-                                                    ],
+                                      onTap: isFuture
+                                          ? null
+                                          : () {
+                                              setState(() {
+                                                selectedDate = date;
+                                              });
+                                            },
+                                      child: Opacity(
+                                        opacity: isFuture ? 0.4 : 1.0,
+                                        child: AbsorbPointer(
+                                          absorbing: isFuture,
+                                          child: Container(
+                                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  _getDayAbbreviation(date),
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: isSelected
+                                                        ? Colors.white
+                                                        : Colors.white70,
+                                                    fontWeight: FontWeight.w500,
                                                   ),
                                                 ),
-                                              ),
+                                                const SizedBox(height: 2),
+                                                Container(
+                                                  width: 36,
+                                                  height: 36,
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected
+                                                        ? Colors.white
+                                                        : Colors.transparent,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                      color: date.day == DateTime.now().day &&
+                                                              date.month == DateTime.now().month &&
+                                                              date.year == DateTime.now().year
+                                                          ? Colors.yellow.shade700
+                                                          : Colors.transparent,
+                                                      width: 2,
+                                                    ),
+                                                  ),
+                                                  child: SizedBox(
+                                                    width: 36,
+                                                    height: 36,
+                                                    child: Center(
+                                                      child: Column(
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          if (isSelected)
+                                                            Text(
+                                                              months[date.month - 1],
+                                                              style: const TextStyle(
+                                                                fontSize: 8,
+                                                                color: Colors.green,
+                                                                fontWeight: FontWeight.w600,
+                                                              ),
+                                                            ),
+                                                          if (isSelected)
+                                                            const SizedBox(height: 1),
+                                                          Text(
+                                                            '${date.day}',
+                                                            style: TextStyle(
+                                                              fontSize: 13,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: isSelected
+                                                                  ? Colors.green
+                                                                  : Colors.white,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                          ],
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -688,269 +683,305 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "Food Diary",
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black,
+                    child: FutureBuilder<List<Map<String, dynamic>>>(
+                      future: _fetchMealsForDate(selectedDate),
+                      builder: (context, mealSnapshot) {
+                        if (mealSnapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        if (mealSnapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Error loading meals: ${mealSnapshot.error}',
+                              style: const TextStyle(color: Colors.red),
                             ),
-                          ),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.grey.withOpacity(0.08),
-                                  spreadRadius: 1,
-                                  blurRadius: 6,
-                                  offset: const Offset(0, 1),
+                          );
+                        }
+                        final meals = mealSnapshot.data ?? [];
+                        int caloriesConsumed = 0;
+                        int carbsConsumed = 0;
+                        int proteinConsumed = 0;
+                        int fatConsumed = 0;
+                        for (var meal in meals) {
+                          caloriesConsumed += _safeNum(meal['calories']);
+                          carbsConsumed += _safeNum(meal['carbs']);
+                          proteinConsumed += _safeNum(meal['protein']);
+                          fatConsumed += _safeNum(meal['fat']);
+                        }
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.all(12.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "Food Diary",
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black,
                                 ),
-                              ],
-                            ),
-                            child: Column(
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                              ),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.grey.withOpacity(0.08),
+                                      spreadRadius: 1,
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
                                   children: [
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Text(
-                                          'Daily Goal',
-                                          style: TextStyle(
-                                            fontSize: 15,
-                                            color: Colors.grey[600],
-                                            fontWeight: FontWeight.w500,
-                                          ),
+                                        Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Daily Goal',
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                color: Colors.grey[600],
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            Text(
+                                              '$dailyGoal cal',
+                                              style: const TextStyle(
+                                                fontSize: 15,
+                                                color: Colors.red,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        Text(
-                                          '$dailyGoal cal',
-                                          style: const TextStyle(
-                                            fontSize: 15,
-                                            color: Colors.red,
-                                            fontWeight: FontWeight.w600,
+                                      ],
+                                    ),
+                                    SizedBox(
+                                      height: 120,
+                                      width: 120,
+                                      child: Stack(
+                                        alignment: Alignment.center,
+                                        children: [
+                                          CustomPaint(
+                                            size: const Size(120, 120),
+                                            painter: SemiCircleProgressPainter(
+                                              progress: dailyGoal > 0
+                                                  ? caloriesConsumed / dailyGoal
+                                                  : 0,
+                                              backgroundColor: Colors.grey[200]!,
+                                              progressColor: const Color.fromARGB(
+                                                255,
+                                                47,
+                                                222,
+                                                38,
+                                              ),
+                                              strokeWidth: 8,
+                                            ),
                                           ),
+                                          Center(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  dailyGoal > 0
+                                                      ? '${dailyGoal - caloriesConsumed}'
+                                                      : '-',
+                                                  style: const TextStyle(
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  'kcal left',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.grey[600],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        _buildMacroCircle(
+                                          'Carbs',
+                                          carbsConsumed,
+                                          carbsTarget,
+                                          Colors.orange,
+                                        ),
+                                        _buildMacroCircle(
+                                          'Protein',
+                                          proteinConsumed,
+                                          proteinTarget,
+                                          Colors.red,
+                                        ),
+                                        _buildMacroCircle(
+                                          'Fat',
+                                          fatConsumed,
+                                          fatTarget,
+                                          Colors.blue,
                                         ),
                                       ],
                                     ),
                                   ],
                                 ),
-                                SizedBox(
-                                  height: 120,
-                                  width: 120,
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
-                                      CustomPaint(
-                                        size: const Size(120, 120),
-                                        painter: SemiCircleProgressPainter(
-                                          progress: dailyGoal > 0
-                                              ? caloriesConsumed / dailyGoal
-                                              : 0,
-                                          backgroundColor: Colors.grey[200]!,
-                                          progressColor: const Color.fromARGB(
-                                            255,
-                                            47,
-                                            222,
-                                            38,
+                              ),
+                              const SizedBox(height: 24),
+                              const Text(
+                                "Recent Meals",
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              ...meals.isEmpty
+                                  ? [
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(12),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.grey.withOpacity(0.08),
+                                              spreadRadius: 1,
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                        child: const Center(
+                                          child: Text(
+                                            'No meals logged for this day.',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.grey,
+                                            ),
                                           ),
-                                          strokeWidth: 8,
                                         ),
                                       ),
-                                      Center(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              dailyGoal > 0
-                                                  ? '${dailyGoal - caloriesConsumed}'
-                                                  : '-',
-                                              style: const TextStyle(
-                                                fontSize: 22,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.black87,
-                                              ),
+                                    ]
+                                  : meals.map((meal) {
+                                      return Container(
+                                        width: double.infinity,
+                                        margin: const EdgeInsets.only(bottom: 12),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(12),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.grey.withOpacity(0.08),
+                                              spreadRadius: 1,
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
                                             ),
-                                            Text(
-                                              'kcal left',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[600],
+                                          ],
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  meal['foodName']?.toString() ?? 'Unknown Food',
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                const Spacer(),
+                                                Text(
+                                                  '${_safeNum(meal['calories'])} kcal',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.qr_code_2,
+                                                  size: 14,
+                                                  color: Colors.orange,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  '${meal['mealType']?.toString() ?? 'Meal'} • Barcode scanned',
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.orange,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                if (meal['time'] != null)
+                                                  Text(
+                                                    meal['time'].toString(),
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey,
+                                                      fontWeight: FontWeight.w400,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            SingleChildScrollView(
+                                              scrollDirection: Axis.horizontal,
+                                              child: Row(
+                                                children: [
+                                                  _buildMacroChip(
+                                                    'Carbs',
+                                                    '${_safeNum(meal['carbs'])}g',
+                                                    Colors.orange,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  _buildMacroChip(
+                                                    'Protein',
+                                                    '${_safeNum(meal['protein'])}g',
+                                                    Colors.red,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  _buildMacroChip(
+                                                    'Fat',
+                                                    '${_safeNum(meal['fat'])}g',
+                                                    Colors.blue,
+                                                  ),
+                                                ],
                                               ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceEvenly,
-                                  children: [
-                                    _buildMacroCircle(
-                                      'Carbs',
-                                      carbsConsumed,
-                                      carbsTarget,
-                                      Colors.orange,
-                                    ),
-                                    _buildMacroCircle(
-                                      'Protein',
-                                      proteinConsumed,
-                                      proteinTarget,
-                                      Colors.red,
-                                    ),
-                                    _buildMacroCircle(
-                                      'Fat',
-                                      fatConsumed,
-                                      fatTarget,
-                                      Colors.blue,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
+                                      );
+                                    }).toList(),
+                            ],
                           ),
-                          const SizedBox(height: 24),
-                          const Text(
-                            "Recent Meals",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.grey.withOpacity(0.08),
-                                  spreadRadius: 1,
-                                  blurRadius: 6,
-                                  offset: const Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: const [
-                                    Text(
-                                      'Rice and Chicken',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    Spacer(),
-                                    Text(
-                                      '300 kcal',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.black54,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: const [
-                                    Icon(
-                                      Icons.restaurant,
-                                      size: 14,
-                                      color: Colors.grey,
-                                    ),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      'Lunch',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: Row(
-                                    children: [
-                                      _buildMacroChip(
-                                        'Carbs',
-                                        '50g',
-                                        Colors.orange,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      _buildMacroChip(
-                                        'Protein',
-                                        '45g',
-                                        Colors.red,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      _buildMacroChip(
-                                        'Fat',
-                                        '30g',
-                                        Colors.blue,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                Center(
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: Colors.green,
-                                        width: 2,
-                                      ),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(13),
-                                      child: Image.asset(
-                                        'assets/rice-chicken.jpg',
-                                        width: 250,
-                                        height: 160,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) =>
-                                                Container(
-                                                  width: 220,
-                                                  height: 160,
-                                                  color: Colors.grey[200],
-                                                  child: const Icon(
-                                                    Icons.broken_image,
-                                                    size: 48,
-                                                    color: Colors.grey,
-                                                  ),
-                                                ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -1091,6 +1122,15 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+// Add this helper function inside _HomeScreenState:
+  int _safeNum(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is double) return value.round();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
   }
 }
 
