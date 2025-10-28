@@ -32,6 +32,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
+    
+    aaptOptions {
+        noCompress("tflite")
+    }
 
     buildTypes {
         release {

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'log_food.dart';
+import 'food/log_food.dart';
 
 class BottomNav extends StatelessWidget {
   final int currentIndex;
