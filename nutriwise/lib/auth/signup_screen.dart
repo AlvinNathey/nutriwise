@@ -252,6 +252,13 @@ class _SignupScreenState extends State<SignupScreen> {
           'weightMetric': weightMetric,
         });
 
+        // --- Save initial weight entry for trend ---
+        await _authService.saveWeightEntry(
+          user.uid,
+          weightToStore,
+          isMetric: _isWeightMetric,
+        );
+
         // Show verification message
         showDialog(
           context: context,
