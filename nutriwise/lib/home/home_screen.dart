@@ -6,6 +6,7 @@ import 'package:nutriwise/food/log_food.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math' as math;
 import 'dart:ui';
+import 'package:nutriwise/services/auth_services.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -22,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Duration(days: DateTime.now().weekday - 1),
   );
   bool _isLogModalOpen = false;
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -74,6 +76,19 @@ class _HomeScreenState extends State<HomeScreen> {
         .collection('users')
         .doc(user.uid)
         .snapshots();
+  }
+
+  // Helper to fetch weight history (for future weight trend UI)
+  Future<List<Map<String, dynamic>>> fetchWeightHistory() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return [];
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('weight_entries')
+        .orderBy('timestamp', descending: false)
+        .get();
+    return snapshot.docs.map((doc) => doc.data()).toList();
   }
 
   void _showWeightDialog() async {
@@ -394,6 +409,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                               'proteinG': proteinG,
                                               'fatG': fatG,
                                             });
+                                        // --- Save weight entry for trend ---
+                                        await _authService.saveWeightEntry(
+                                          FirebaseAuth.instance.currentUser!.uid,
+                                          double.parse(newWeight.toStringAsFixed(2)),
+                                          isMetric: metric,
+                                        );
                                         Navigator.of(ctx).pop();
                                         ScaffoldMessenger.of(
                                           context,

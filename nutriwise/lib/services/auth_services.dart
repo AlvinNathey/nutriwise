@@ -32,6 +32,19 @@ class AuthService {
     });
   }
 
+  /// Save a weight entry for the user (for weight trend/history)
+  Future<void> saveWeightEntry(String uid, double weight, {bool isMetric = true}) async {
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('weight_entries')
+        .add({
+      'weight': weight,
+      'isMetric': isMetric,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<void> signOut() async {
     await _auth.signOut();
   }
