@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:nutriwise/profile.dart'; // Import ProfileScreen
 import 'package:nutriwise/records.dart'; // Import RecordsPage
+import 'package:nutriwise/history.dart'; // Import HistoryPage
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({Key? key}) : super(key: key);
@@ -60,10 +61,10 @@ class MoreScreen extends StatelessWidget {
               title: 'History',
               onTap: () {
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Coming Soon'),
-                    backgroundColor: Colors.blue,
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const HistoryPage(), // Navigate to HistoryPage
                   ),
                 );
               },
@@ -151,10 +152,10 @@ class MoreScreen extends StatelessWidget {
               icon: Icons.history,
               title: 'History',
               onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Coming Soon'),
-                    backgroundColor: Colors.blue,
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const HistoryPage(), // Navigate to HistoryPage
                   ),
                 );
               },

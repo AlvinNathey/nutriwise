@@ -4,6 +4,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:nutriwise/services/auth_services.dart';
 
+// Color mapping for meal types
+const Map<String, Color> mealTypeColors = {
+  'Breakfast': Colors.orange,
+  'Lunch': Colors.teal,
+  'Dinner': Colors.purple,
+  'Snack': Colors.blue,
+};
+
 // Main Records Page
 class RecordsPage extends StatefulWidget {
   const RecordsPage({Key? key}) : super(key: key);
@@ -28,6 +36,8 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
     'Dinner': 0,
     'Snack': 0,
   };
+  // New: Map day -> Set of meal types
+  Map<int, Set<String>> _dayMealTypes = {};
 
   @override
   void initState() {
@@ -84,6 +94,8 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
       'Dinner': 0,
       'Snack': 0,
     };
+    // New: Map day -> Set of meal types
+    Map<int, Set<String>> dayMealTypes = {};
 
     // Query meals for the month
     final snapshot = await FirebaseFirestore.instance
@@ -98,7 +110,14 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
       final data = doc.data();
       final createdAt = data['createdAt'];
       final calories = (data['calories'] ?? 0).round();
-      final mealType = (data['mealType'] ?? 'Meal').toString();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
+      // Normalize snack types
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
 
       if (createdAt is Timestamp) {
         final date = createdAt.toDate();
@@ -107,12 +126,15 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         if (mealTypeCounts.containsKey(mealType)) {
           mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
         }
+        dayMealTypes.putIfAbsent(day, () => <String>{});
+        dayMealTypes[day]!.add(mealType);
       }
     }
 
     setState(() {
       _calorieData = calorieData;
       _mealTypeCounts = mealTypeCounts;
+      _dayMealTypes = dayMealTypes; // Store for calendar rendering
     });
   }
 
@@ -365,6 +387,9 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                   return Container();
                 }
 
+                // Get meal types for this day
+                final mealTypes = _dayMealTypes[dayNumber]?.toList() ?? [];
+
                 return Container(
                   margin: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
@@ -387,32 +412,26 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                           ),
                         ),
                       ),
-                      // Only show calorie dot if there is data for the day
-                      if (calorieData.containsKey(dayNumber) && !isFuture)
+                      // Show colored dots for each meal type (max 4 per day)
+                      if (mealTypes.isNotEmpty && !isFuture)
                         Positioned(
                           bottom: 4,
                           left: 0,
                           right: 0,
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: Colors.orange,
+                            children: List.generate(
+                              mealTypes.length > 4 ? 4 : mealTypes.length,
+                              (i) => Container(
+                                width: 8,
+                                height: 8,
+                                margin: const EdgeInsets.symmetric(horizontal: 1),
+                                decoration: BoxDecoration(
+                                  color: mealTypeColors[mealTypes[i]] ?? Colors.grey,
                                   shape: BoxShape.circle,
                                 ),
                               ),
-                              const SizedBox(width: 2),
-                              Text(
-                                calorieData[dayNumber].toString(),
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ),
                       if (isFuture)
@@ -581,7 +600,15 @@ class _NutrientsPageState extends State<NutrientsPage> {
 
     for (var doc in snapshot.docs) {
       final data = doc.data();
-      final mealType = (data['mealType'] ?? 'Meal').toString();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
+      // Normalize snack types
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
+
       if (mealCounts.containsKey(mealType)) {
         mealCounts[mealType] = mealCounts[mealType]! + 1;
         mealMacros[mealType]!.add(data);
@@ -808,8 +835,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
                                   backgroundColor: Colors.green,
                                 ),
                               );
-                              // Refresh weight entries
+                              // Refresh weight entries and update graph
                               await _fetchWeightEntries();
+                              setState(() {}); // Force rebuild to update graph and value
                             }
                           }
                         }
@@ -873,30 +901,29 @@ class _NutrientsPageState extends State<NutrientsPage> {
       );
     }
 
-    // Prepare chart data: group entries by month, use the first entry for each month
-    Map<String, double> monthWeightMap = {};
+    // Prepare chart data: use all entries for the current month
+    List<FlSpot> spots = [];
+    List<DateTime> entryDates = [];
     for (var entry in _weightEntries) {
       final ts = entry['timestamp'];
       if (ts is Timestamp) {
         final date = ts.toDate();
-        final monthKey = '${date.year}-${date.month.toString().padLeft(2, '0')}';
-        if (!monthWeightMap.containsKey(monthKey)) {
-          monthWeightMap[monthKey] = (entry['weight'] ?? 0).toDouble();
-        }
+        entryDates.add(date);
       }
     }
-    // Sort months chronologically
-    final sortedMonths = monthWeightMap.keys.toList()
-      ..sort((a, b) => a.compareTo(b));
-
-    // Prepare FlSpot list: x = index, y = weight
-    List<FlSpot> spots = [];
-    for (int i = 0; i < sortedMonths.length; i++) {
-      spots.add(FlSpot(i.toDouble(), monthWeightMap[sortedMonths[i]]!));
+    entryDates.sort((a, b) => a.compareTo(b));
+    for (int i = 0; i < entryDates.length; i++) {
+      final entry = _weightEntries[i];
+      final ts = entry['timestamp'];
+      if (ts is Timestamp) {
+        final date = ts.toDate();
+        final weight = (entry['weight'] ?? 0).toDouble();
+        spots.add(FlSpot(i.toDouble(), weight));
+      }
     }
 
-    double minY = spots.map((s) => s.y).reduce((a, b) => a < b ? a : b) - 1;
-    double maxY = spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) + 1;
+    double minY = spots.isNotEmpty ? spots.map((s) => s.y).reduce((a, b) => a < b ? a : b) - 1 : 0;
+    double maxY = spots.isNotEmpty ? spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) + 1 : 0;
     double latestWeight = spots.isNotEmpty ? spots.last.y : 0;
     String unit = (_weightEntries.last['isMetric'] == true) ? 'kg' : 'lbs';
 
@@ -962,12 +989,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           int idx = value.toInt();
-                          if (idx >= 0 && idx < sortedMonths.length) {
-                            final parts = sortedMonths[idx].split('-');
-                            final year = parts[0];
-                            final month = parts[1];
+                          if (idx >= 0 && idx < entryDates.length) {
+                            final date = entryDates[idx];
                             return Text(
-                              '$month/$year',
+                              '${date.day}/${date.month}',
                               style: const TextStyle(fontSize: 10),
                             );
                           }
@@ -980,7 +1005,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
                   ),
                   borderData: FlBorderData(show: false),
                   minX: 0,
-                  maxX: sortedMonths.length > 0 ? (sortedMonths.length - 1).toDouble() : 0,
+                  maxX: spots.isNotEmpty ? (spots.length - 1).toDouble() : 0,
                   minY: minY,
                   maxY: maxY,
                   lineBarsData: [
