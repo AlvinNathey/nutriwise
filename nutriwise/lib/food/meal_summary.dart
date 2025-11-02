@@ -2,13 +2,64 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:nutriwise/home/home_screen.dart';
+import 'package:barcode_scan2/barcode_scan2.dart';
+
+// Model class for food items
+class FoodItem {
+  String barcode;
+  String? foodName;
+  double baseCalories;
+  double baseCarbs;
+  double baseProtein;
+  double baseFat;
+  String servingUnit;
+  double baselineQuantity;
+  int wholeQuantity;
+  int selectedDivision;
+  bool isCustomQuantity;
+  double customQuantity;
+  bool hasNutritionData;
+  bool isOcrMode;
+
+  FoodItem({
+    required this.barcode,
+    this.foodName,
+    this.baseCalories = 0,
+    this.baseCarbs = 0,
+    this.baseProtein = 0,
+    this.baseFat = 0,
+    this.servingUnit = 'g',
+    this.baselineQuantity = 100.0,
+    this.wholeQuantity = 1,
+    this.selectedDivision = 10,
+    this.isCustomQuantity = false,
+    this.customQuantity = 0.0,
+    this.hasNutritionData = false,
+    this.isOcrMode = false,
+  });
+
+  double getTotalQuantity() {
+    if (isCustomQuantity) {
+      return customQuantity;
+    }
+    return (wholeQuantity * baselineQuantity) +
+        (selectedDivision < 10 ? baselineQuantity * selectedDivision / 10.0 : 0.0);
+  }
+
+  double getMultiplier() {
+    return getTotalQuantity() / baselineQuantity;
+  }
+
+  double getCalories() => baseCalories * getMultiplier();
+  double getCarbs() => baseCarbs * getMultiplier();
+  double getProtein() => baseProtein * getMultiplier();
+  double getFat() => baseFat * getMultiplier();
+}
 
 class MealSummaryPage extends StatefulWidget {
   final String mealType;
@@ -27,155 +78,131 @@ class MealSummaryPage extends StatefulWidget {
 }
 
 class _MealSummaryPageState extends State<MealSummaryPage> {
+  List<FoodItem> _foodItems = [];
+  int _currentFoodIndex = 0;
   bool _isLoading = true;
-  bool _hasNutritionData = false;
-  bool _isOcrMode = false;
   bool _isProcessingOcr = false;
-  bool _showOcrReview = false; // New: Track if showing OCR review screen
-  String? _customFoodName;
-  
-  // Nutrition data per 100g/ml
-  double _baseCalories = 0;
-  double _baseCarbs = 0;
-  double _baseProtein = 0;
-  double _baseFat = 0;
-  String _servingUnit = 'g';
-  
+  bool _showOcrReview = false;
+  bool _isScanningNewFood = false;
+
   // Temporary storage for OCR extracted values (before confirmation)
   double _tempCalories = 0;
   double _tempCarbs = 0;
   double _tempProtein = 0;
   double _tempFat = 0;
-  
-  // Quantity controls
-  int _wholeQuantity = 1;
-  int _selectedDivision = 10;
-  
-  // Controllers for manual editing
-  final TextEditingController _caloriesController = TextEditingController();
-  final TextEditingController _carbsController = TextEditingController();
-  final TextEditingController _proteinController = TextEditingController();
-  final TextEditingController _fatController = TextEditingController();
+
   final TextEditingController _foodNameController = TextEditingController();
-  
-  // Controllers for OCR review editing
   final TextEditingController _ocrCaloriesController = TextEditingController();
   final TextEditingController _ocrCarbsController = TextEditingController();
   final TextEditingController _ocrProteinController = TextEditingController();
   final TextEditingController _ocrFatController = TextEditingController();
-  
-  String _selectedUnit = 'g';
+  final TextEditingController _customQuantityController = TextEditingController();
+
   final ImagePicker _imagePicker = ImagePicker();
   final TextRecognizer _textRecognizer = TextRecognizer();
-  
-  bool _isCustomQuantity = false;
-  final TextEditingController _customQuantityController = TextEditingController();
-  double _customQuantity = 0.0;
-  double _baselineQuantity = 100.0; // Default to 100g/ml
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   @override
   void initState() {
     super.initState();
-    _fetchNutritionData();
+    _initializeFirstFood();
+  }
+
+  void _initializeFirstFood() {
+    final firstFood = FoodItem(
+      barcode: widget.barcode,
+      foodName: widget.foodName,
+    );
+    _foodItems.add(firstFood);
+    _fetchNutritionData(_currentFoodIndex);
   }
 
   @override
   void dispose() {
-    _caloriesController.dispose();
-    _carbsController.dispose();
-    _proteinController.dispose();
-    _fatController.dispose();
     _foodNameController.dispose();
     _ocrCaloriesController.dispose();
     _ocrCarbsController.dispose();
     _ocrProteinController.dispose();
     _ocrFatController.dispose();
-    _textRecognizer.close();
     _customQuantityController.dispose();
+    _textRecognizer.close();
     super.dispose();
   }
 
-  Future<void> _fetchNutritionData() async {
+  FoodItem get _currentFood => _foodItems[_currentFoodIndex];
+
+  Future<void> _fetchNutritionData(int index) async {
     setState(() => _isLoading = true);
 
     try {
+      final food = _foodItems[index];
       final user = FirebaseAuth.instance.currentUser;
       DocumentSnapshot<Map<String, dynamic>>? barcodeDoc;
 
       if (user != null) {
-        // Try user-specific barcode first
         barcodeDoc = await _firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('barcodes')
-          .doc(widget.barcode)
-          .get();
+            .collection('users')
+            .doc(user.uid)
+            .collection('barcodes')
+            .doc(food.barcode)
+            .get();
       }
 
       if (barcodeDoc != null && barcodeDoc.exists) {
         final data = barcodeDoc.data();
         setState(() {
-          _baseCalories = (data?['calories'] ?? 0).toDouble();
-          _baseCarbs = (data?['carbs'] ?? 0).toDouble();
-          _baseProtein = (data?['protein'] ?? 0).toDouble();
-          _baseFat = (data?['fat'] ?? 0).toDouble();
-          _servingUnit = 'g';
-          _selectedUnit = _servingUnit;
-          _baselineQuantity = 100.0;
-          _customFoodName = data?['foodName'];
-          _hasNutritionData = true;
+          food.baseCalories = (data?['calories'] ?? 0).toDouble();
+          food.baseCarbs = (data?['carbs'] ?? 0).toDouble();
+          food.baseProtein = (data?['protein'] ?? 0).toDouble();
+          food.baseFat = (data?['fat'] ?? 0).toDouble();
+          food.servingUnit = 'g';
+          food.baselineQuantity = 100.0;
+          food.foodName = data?['foodName'];
+          food.hasNutritionData = true;
           _isLoading = false;
-          _updateDisplayedValues();
         });
         return;
       }
 
-      // Fallback: fetch from global barcodes collection
-      final globalDoc = await _firestore.collection('barcodes').doc(widget.barcode).get();
+      final globalDoc = await _firestore.collection('barcodes').doc(food.barcode).get();
       if (globalDoc.exists) {
         final data = globalDoc.data();
         setState(() {
-          _baseCalories = (data?['calories'] ?? 0).toDouble();
-          _baseCarbs = (data?['carbs'] ?? 0).toDouble();
-          _baseProtein = (data?['protein'] ?? 0).toDouble();
-          _baseFat = (data?['fat'] ?? 0).toDouble();
-          _servingUnit = 'g';
-          _selectedUnit = _servingUnit;
-          _baselineQuantity = 100.0;
-          _customFoodName = data?['foodName'];
-          _hasNutritionData = true;
+          food.baseCalories = (data?['calories'] ?? 0).toDouble();
+          food.baseCarbs = (data?['carbs'] ?? 0).toDouble();
+          food.baseProtein = (data?['protein'] ?? 0).toDouble();
+          food.baseFat = (data?['fat'] ?? 0).toDouble();
+          food.servingUnit = 'g';
+          food.baselineQuantity = 100.0;
+          food.foodName = data?['foodName'];
+          food.hasNutritionData = true;
           _isLoading = false;
-          _updateDisplayedValues();
         });
         return;
       }
 
-      // Fallback: fetch from OpenFoodFacts
-      final nutritionData = await _fetchFromOpenFoodFacts(widget.barcode);
+      final nutritionData = await _fetchFromOpenFoodFacts(food.barcode);
 
       if (nutritionData != null) {
         setState(() {
-          _baseCalories = nutritionData['calories'] ?? 0;
-          _baseCarbs = nutritionData['carbs'] ?? 0;
-          _baseProtein = nutritionData['protein'] ?? 0;
-          _baseFat = nutritionData['fat'] ?? 0;
-          _servingUnit = nutritionData['unit'] ?? 'g';
-          _selectedUnit = _servingUnit;
-          _baselineQuantity = nutritionData['baselineQuantity'] ?? 100.0;
-          _hasNutritionData = true;
+          food.baseCalories = nutritionData['calories'] ?? 0;
+          food.baseCarbs = nutritionData['carbs'] ?? 0;
+          food.baseProtein = nutritionData['protein'] ?? 0;
+          food.baseFat = nutritionData['fat'] ?? 0;
+          food.servingUnit = nutritionData['unit'] ?? 'g';
+          food.baselineQuantity = nutritionData['baselineQuantity'] ?? 100.0;
+          food.hasNutritionData = true;
           _isLoading = false;
-          _updateDisplayedValues();
         });
       } else {
         setState(() {
-          _hasNutritionData = false;
+          food.hasNutritionData = false;
           _isLoading = false;
         });
       }
     } catch (e) {
       setState(() {
-        _hasNutritionData = false;
+        _foodItems[index].hasNutritionData = false;
         _isLoading = false;
       });
     }
@@ -197,7 +224,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             double baselineQuantity = 100.0;
             bool hasServing = false;
 
-            // Try to get serving size from product info
             if (product.containsKey('serving_size')) {
               final servingStr = product['serving_size'].toString().toLowerCase();
               final match = RegExp(r'(\d+\.?\d*)\s*(g|ml)').firstMatch(servingStr);
@@ -207,7 +233,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 hasServing = true;
               }
             }
-            // Fallback: check for known fields
+
             if (!hasServing && product.containsKey('quantity')) {
               final quantityStr = product['quantity'].toString().toLowerCase();
               final match = RegExp(r'(\d+\.?\d*)\s*(g|ml)').firstMatch(quantityStr);
@@ -224,19 +250,17 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               unit = 'ml';
             }
 
-            // Prefer per serving values if available
             double? calories, carbs, protein, fat;
             if (hasServing) {
               calories = _parseDouble(nutriments['energy-kcal_serving']) ??
-                         _parseDouble(nutriments['energy_serving']);
+                  _parseDouble(nutriments['energy_serving']);
               carbs = _parseDouble(nutriments['carbohydrates_serving']);
               protein = _parseDouble(nutriments['proteins_serving']);
               fat = _parseDouble(nutriments['fat_serving']);
             }
 
-            // Fallback to per 100g/ml if per serving not available
             calories ??= _parseDouble(nutriments['energy-kcal_100g']) ??
-                         _parseDouble(nutriments['energy_100g']);
+                _parseDouble(nutriments['energy_100g']);
             carbs ??= _parseDouble(nutriments['carbohydrates_100g']);
             protein ??= _parseDouble(nutriments['proteins_100g']);
             fat ??= _parseDouble(nutriments['fat_100g']);
@@ -266,49 +290,113 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     return null;
   }
 
+  Future<void> _scanAnotherFood() async {
+    setState(() => _isScanningNewFood = true);
+
+    try {
+      var scanResult = await BarcodeScanner.scan();
+      String barcode = scanResult.rawContent;
+      
+      if (barcode.isEmpty) {
+        setState(() => _isScanningNewFood = false);
+        _showErrorDialog('No barcode scanned.');
+        return;
+      }
+
+      // Check if barcode already exists
+      bool alreadyScanned = _foodItems.any((food) => food.barcode == barcode);
+      if (alreadyScanned) {
+        setState(() => _isScanningNewFood = false);
+        _showErrorDialog('This product has already been scanned!');
+        return;
+      }
+
+      // Lookup product name
+      String productName = await _enhancedBarcodeLookup(barcode);
+
+      // Add new food item
+      final newFood = FoodItem(
+        barcode: barcode,
+        foodName: productName,
+      );
+
+      setState(() {
+        _foodItems.add(newFood);
+        _currentFoodIndex = _foodItems.length - 1;
+        _isScanningNewFood = false;
+      });
+
+      // Fetch nutrition data for new food
+      await _fetchNutritionData(_currentFoodIndex);
+
+    } catch (e) {
+      setState(() => _isScanningNewFood = false);
+      _showErrorDialog('Barcode scan failed: ${e.toString()}');
+    }
+  }
+
+  Future<String> _enhancedBarcodeLookup(String barcode) async {
+    try {
+      final url = Uri.parse('https://world.openfoodfacts.org/api/v0/product/$barcode.json');
+      final response = await http.get(url).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 1 && data['product'] != null) {
+          final product = data['product'];
+          final productName = product['product_name'] ??
+              product['product_name_en'] ??
+              product['generic_name'];
+
+          if (productName != null && productName.toString().trim().isNotEmpty) {
+            return productName.toString();
+          }
+        }
+      }
+    } catch (e) {
+      // Continue to fallback
+    }
+    return 'Unknown Product (Barcode: $barcode)';
+  }
+
   Future<void> _captureNutritionalInfo() async {
     try {
       final XFile? image = await _imagePicker.pickImage(
         source: ImageSource.camera,
         imageQuality: 85,
       );
-      
+
       if (image == null) return;
-      
+
       setState(() => _isProcessingOcr = true);
-      
+
       final inputImage = InputImage.fromFilePath(image.path);
       final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
-      print('Recognized text: ${recognizedText.text}');
-      
+
       final extractedData = _extractNutritionalData(recognizedText.text);
-      
-      if (extractedData['calories'] != null || 
-          extractedData['carbs'] != null || 
-          extractedData['protein'] != null || 
+
+      if (extractedData['calories'] != null ||
+          extractedData['carbs'] != null ||
+          extractedData['protein'] != null ||
           extractedData['fat'] != null) {
-        
-        // Store extracted values in temporary variables
         setState(() {
           _tempCalories = extractedData['calories'] ?? 0;
           _tempCarbs = extractedData['carbs'] ?? 0;
           _tempProtein = extractedData['protein'] ?? 0;
           _tempFat = extractedData['fat'] ?? 0;
-          
-          // Set controllers for OCR review
+
           _ocrCaloriesController.text = _tempCalories.toStringAsFixed(1);
           _ocrCarbsController.text = _tempCarbs.toStringAsFixed(1);
           _ocrProteinController.text = _tempProtein.toStringAsFixed(1);
           _ocrFatController.text = _tempFat.toStringAsFixed(1);
-          
+
           _isProcessingOcr = false;
-          _showOcrReview = true; // Show the review screen
+          _showOcrReview = true;
         });
       } else {
         setState(() => _isProcessingOcr = false);
         _showErrorDialog('Could not extract nutritional information from the image. Please try again or enter values manually.');
       }
-      
     } catch (e) {
       setState(() => _isProcessingOcr = false);
       _showErrorDialog('Error processing image: ${e.toString()}');
@@ -323,18 +411,15 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     double? carbs;
     double? fat;
 
-    // Find first kcal value
     for (int i = 0; i < lines.length; i++) {
       final l = lines[i].toLowerCase();
       final match = RegExp(r'(\d+\.?\d*)\s*kcal').firstMatch(l);
       if (match != null) {
         calories = double.tryParse(match.group(1)!);
-        // Start scanning for macros after this line
         int macroIdx = i + 1;
         int found = 0;
         while (macroIdx < lines.length && found < 3) {
           final macroLine = lines[macroIdx].toLowerCase();
-          // Skip subtypes
           if (macroLine.contains('of which')) {
             macroIdx++;
             continue;
@@ -351,7 +436,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           }
           macroIdx++;
         }
-        break; // Stop after first kcal found
+        break;
       }
     }
 
@@ -363,9 +448,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     };
   }
 
-  // Confirm OCR extracted values and proceed to food name entry
   void _confirmOcrValues() {
-    // Validate that at least some values are entered
     final calories = double.tryParse(_ocrCaloriesController.text) ?? 0;
     final carbs = double.tryParse(_ocrCarbsController.text) ?? 0;
     final protein = double.tryParse(_ocrProteinController.text) ?? 0;
@@ -376,15 +459,13 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       return;
     }
 
-    // Update base values
     setState(() {
-      _baseCalories = calories;
-      _baseCarbs = carbs;
-      _baseProtein = protein;
-      _baseFat = fat;
+      _currentFood.baseCalories = calories;
+      _currentFood.baseCarbs = carbs;
+      _currentFood.baseProtein = protein;
+      _currentFood.baseFat = fat;
     });
 
-    // Show food name dialog, and save to Firestore after user enters name
     _showFoodNameDialogAndSave();
   }
 
@@ -412,7 +493,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 Navigator.of(context).pop();
                 setState(() {
                   _showOcrReview = false;
-                  _hasNutritionData = false;
+                  _currentFood.hasNutritionData = false;
                 });
               },
             ),
@@ -422,20 +503,18 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 if (_foodNameController.text.trim().isNotEmpty) {
                   final foodName = _foodNameController.text.trim();
                   setState(() {
-                    _customFoodName = foodName;
-                    _hasNutritionData = true;
-                    _isOcrMode = true;
+                    _currentFood.foodName = foodName;
+                    _currentFood.hasNutritionData = true;
+                    _currentFood.isOcrMode = true;
                     _showOcrReview = false;
-                    _updateDisplayedValues();
                   });
                   Navigator.of(context).pop();
 
-                  // Save nutritional info to Firestore barcodes collection
-                  await _firestore.collection('barcodes').doc(widget.barcode).set({
-                    'calories': _baseCalories,
-                    'carbs': _baseCarbs,
-                    'protein': _baseProtein,
-                    'fat': _baseFat,
+                  await _firestore.collection('barcodes').doc(_currentFood.barcode).set({
+                    'calories': _currentFood.baseCalories,
+                    'carbs': _currentFood.baseCarbs,
+                    'protein': _currentFood.baseProtein,
+                    'fat': _currentFood.baseFat,
                     'foodName': foodName,
                     'createdAt': FieldValue.serverTimestamp(),
                   });
@@ -464,7 +543,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     );
   }
 
-  void _saveFoodDetails() async {
+  void _saveAllFoodDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -480,24 +559,27 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
     ][now.weekday - 1];
 
-    await _firestore
-        .collection('users')
-        .doc(user.uid)
-        .collection('barcodes') 
-        .add({
-      'foodName': _customFoodName ?? widget.foodName ?? 'Unknown Product (${widget.barcode})',
-      'calories': double.tryParse(_caloriesController.text) ?? 0,
-      'carbs': double.tryParse(_carbsController.text) ?? 0,
-      'protein': double.tryParse(_proteinController.text) ?? 0,
-      'fat': double.tryParse(_fatController.text) ?? 0,
-      'quantity': _getTotalQuantity(),
-      'unit': _selectedUnit,
-      'mealType': widget.mealType,
-      'date': dateStr,
-      'time': timeStr,
-      'weekday': weekdayStr,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    // Save all food items
+    for (var food in _foodItems) {
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('barcodes')
+          .add({
+        'foodName': food.foodName ?? 'Unknown Product (${food.barcode})',
+        'calories': food.getCalories(),
+        'carbs': food.getCarbs(),
+        'protein': food.getProtein(),
+        'fat': food.getFat(),
+        'quantity': food.getTotalQuantity(),
+        'unit': food.servingUnit,
+        'mealType': widget.mealType,
+        'date': dateStr,
+        'time': timeStr,
+        'weekday': weekdayStr,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -505,12 +587,12 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         behavior: SnackBarBehavior.floating,
         content: Row(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.check_circle, color: Colors.white),
-            SizedBox(width: 12),
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white),
+            const SizedBox(width: 12),
             Text(
-              'Meal stored successfully!',
-              style: TextStyle(
+              '${_foodItems.length} item${_foodItems.length > 1 ? "s" : ""} saved successfully!',
+              style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
@@ -524,8 +606,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       ),
     );
 
-    // Navigate to HomeScreen after saving
-    await Future.delayed(const Duration(milliseconds: 500)); // Let snackbar show briefly
+    await Future.delayed(const Duration(milliseconds: 500));
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -534,31 +615,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     }
   }
 
-  double _getTotalQuantity() {
-    if (_isCustomQuantity) {
-      return _customQuantity;
-    }
-    // Use baseline quantity instead of 100
-    return (_wholeQuantity * _baselineQuantity) +
-        (_selectedDivision < 10 ? _baselineQuantity * _selectedDivision / 10.0 : 0.0);
-  }
-
-  double _getMultiplier() {
-    // Always divide by baseline quantity
-    return _getTotalQuantity() / _baselineQuantity;
-  }
-
-  void _updateDisplayedValues() {
-    final multiplier = _getMultiplier();
-    
-    _caloriesController.text = (_baseCalories * multiplier).toStringAsFixed(1);
-    _carbsController.text = (_baseCarbs * multiplier).toStringAsFixed(1);
-    _proteinController.text = (_baseProtein * multiplier).toStringAsFixed(1);
-    _fatController.text = (_baseFat * multiplier).toStringAsFixed(1);
-  }
-
   void _showCustomQuantityDialog() {
-    _customQuantityController.text = _getTotalQuantity().toStringAsFixed(1);
+    _customQuantityController.text = _currentFood.getTotalQuantity().toStringAsFixed(1);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -571,15 +629,13 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           ],
           decoration: InputDecoration(
             labelText: 'Quantity',
-            suffixText: _selectedUnit,
+            suffixText: _currentFood.servingUnit,
             border: const OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
+            onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           TextButton(
@@ -587,9 +643,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               final val = double.tryParse(_customQuantityController.text);
               if (val != null && val > 0) {
                 setState(() {
-                  _customQuantity = val;
-                  _isCustomQuantity = true;
-                  _updateDisplayedValues();
+                  _currentFood.customQuantity = val;
+                  _currentFood.isCustomQuantity = true;
                 });
                 Navigator.pop(context);
               }
@@ -603,233 +658,28 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
   void _clearCustomQuantity() {
     setState(() {
-      _isCustomQuantity = false;
-      _customQuantity = 0.0;
-      _updateDisplayedValues();
+      _currentFood.isCustomQuantity = false;
+      _currentFood.customQuantity = 0.0;
     });
-  }
-
-  Widget _buildQuantityControl() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Quantity',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black,
-                ),
-              ),
-              GestureDetector(
-                onTap: () {
-                  _showCustomQuantityDialog();
-                },
-                child: Row(
-                  children: [
-                    Text(
-                      '${_getTotalQuantity().toStringAsFixed(1)}$_selectedUnit',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                    if (_isCustomQuantity)
-                      IconButton(
-                        icon: const Icon(Icons.clear, size: 18, color: Colors.red),
-                        onPressed: _clearCustomQuantity,
-                        tooltip: 'Clear custom quantity',
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (!_isCustomQuantity) ...[
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[300]!),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: DropdownButton<String>(
-                    value: _selectedUnit,
-                    underline: const SizedBox(),
-                    items: const [
-                      DropdownMenuItem(value: 'g', child: Text('g')),
-                      DropdownMenuItem(value: 'ml', child: Text('ml')),
-                      DropdownMenuItem(value: 'oz', child: Text('oz')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _selectedUnit = value!);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                IconButton(
-                  onPressed: _decrementWholeQuantity,
-                  icon: const Icon(Icons.remove_circle_outline),
-                  color: Colors.red[400],
-                  iconSize: 32,
-                ),
-                Container(
-                  width: 80,
-                  alignment: Alignment.center,
-                  child: Text(
-                    _getQuantityDisplay(),
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: _incrementWholeQuantity,
-                  icon: const Icon(Icons.add_circle_outline),
-                  color: Colors.green[400],
-                  iconSize: 32,
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Fine adjustment (0-10/10):',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: List.generate(
-                10,
-                (index) => Expanded(
-                  child: GestureDetector(
-                    onTap: () => _onDivisionTap(index + 1),
-                    child: Container(
-                      height: 32,
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      decoration: BoxDecoration(
-                        color: (index + 1) <= _selectedDivision
-                            ? Colors.red[400]
-                            : Colors.grey[300],
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                '$_selectedDivision/10 portions',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  void _onDivisionTap(int division) {
-    setState(() {
-      _selectedDivision = division;
-      if (_wholeQuantity == 0 && division == 10) {
-        _wholeQuantity = 1;
-      }
-      _updateDisplayedValues();
-    });
-  }
-
-  void _decrementWholeQuantity() {
-    setState(() {
-      if (_wholeQuantity > 0) {
-        _wholeQuantity--;
-        if (_wholeQuantity == 0 && _selectedDivision == 10) {
-          _selectedDivision = 0;
-        }
-        _updateDisplayedValues();
-      }
-    });
-  }
-
-  void _incrementWholeQuantity() {
-    setState(() {
-      _wholeQuantity++;
-      _updateDisplayedValues();
-    });
-  }
-
-  void _showEditDialog(String field, TextEditingController controller) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Edit $field'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
-          ],
-          decoration: InputDecoration(
-            labelText: field,
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {});
-              Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
   }
 
   String _getQuantityDisplay() {
-    if (_wholeQuantity == 0) {
-      double fraction = _selectedDivision / 10.0;
+    if (_currentFood.wholeQuantity == 0) {
+      double fraction = _currentFood.selectedDivision / 10.0;
       if (fraction == 0.5) return '½';
       if (fraction == 0.25) return '¼';
       if (fraction == 0.75) return '¾';
       return fraction.toString();
-    } else if (_selectedDivision == 10 || _selectedDivision == 0) {
-      return _wholeQuantity.toString();
+    } else if (_currentFood.selectedDivision == 10 || _currentFood.selectedDivision == 0) {
+      return _currentFood.wholeQuantity.toString();
     } else {
-      double fraction = _selectedDivision / 10.0;
+      double fraction = _currentFood.selectedDivision / 10.0;
       String fractionStr = '';
       if (fraction == 0.5) fractionStr = '½';
       else if (fraction == 0.25) fractionStr = '¼';
       else if (fraction == 0.75) fractionStr = '¾';
       else fractionStr = '($fraction)';
-      return '$_wholeQuantity $fractionStr';
+      return '${_currentFood.wholeQuantity} $fractionStr';
     }
   }
 
@@ -842,16 +692,14 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
     ][now.weekday - 1];
 
-    // Show OCR Review Screen
     if (_showOcrReview) {
       return _buildOcrReviewScreen();
     }
 
-    // Main Meal Summary Screen
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Meal Summary'),
+        title: Text('${widget.mealType} - ${_foodItems.length} item${_foodItems.length > 1 ? "s" : ""}'),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
         leading: IconButton(
@@ -861,7 +709,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         centerTitle: true,
         elevation: 0,
       ),
-      body: _isLoading || _isProcessingOcr
+      body: _isLoading || _isProcessingOcr || _isScanningNewFood
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -869,7 +717,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                   const CircularProgressIndicator(),
                   const SizedBox(height: 16),
                   Text(
-                    _isProcessingOcr ? 'Processing image...' : 'Loading...',
+                    _isProcessingOcr
+                        ? 'Processing image...'
+                        : _isScanningNewFood
+                            ? 'Scanning barcode...'
+                            : 'Loading...',
                     style: const TextStyle(fontSize: 16),
                   ),
                 ],
@@ -917,8 +769,29 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  
-                  // Food Item Name
+
+                  // Show summary of all scanned foods
+                  if (_foodItems.length > 1) ...[
+                    _buildAllFoodsSummary(),
+                    const SizedBox(height: 24),
+                    const Divider(),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Currently Editing:',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Food tabs for navigation
+                  if (_foodItems.length > 1) _buildFoodTabs(),
+                  if (_foodItems.length > 1) const SizedBox(height: 16),
+
+                  // Current Food Item Name
                   const Text(
                     'Food Item:',
                     style: TextStyle(
@@ -937,27 +810,49 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                       border: Border.all(color: Colors.green[300]!),
                     ),
                     child: Text(
-                      _customFoodName ?? widget.foodName ?? 'Unknown Product (${widget.barcode})',
+                      _currentFood.foodName ?? 'Unknown Product (${_currentFood.barcode})',
                       style: const TextStyle(fontSize: 18, color: Colors.black),
                     ),
                   ),
-                  
-                  if (_hasNutritionData) ...[
+
+                  if (_currentFood.hasNutritionData) ...[
                     const SizedBox(height: 24),
-                    
                     _buildQuantityControl(),
-                    
                     const SizedBox(height: 24),
-                    
                     _buildNutritionInfo(),
-                    
-                    const SizedBox(height: 32),
-                    
+                    const SizedBox(height: 24),
+
+                    // Scan Another Food Button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: OutlinedButton.icon(
+                        onPressed: _scanAnotherFood,
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: const Text(
+                          'Scan Another Food',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.green,
+                          side: const BorderSide(color: Colors.green, width: 2),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(28),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Save All Foods Button
                     SizedBox(
                       width: double.infinity,
                       height: 56,
                       child: ElevatedButton(
-                        onPressed: _saveFoodDetails,
+                        onPressed: _saveAllFoodDetails,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
                           shape: RoundedRectangleBorder(
@@ -965,7 +860,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                           ),
                         ),
                         child: Text(
-                          _isOcrMode ? 'Save Food Details' : 'Save & Continue',
+                          _foodItems.length > 1 
+                              ? 'Save All ${_foodItems.length} Items' 
+                              : 'Save & Continue',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
@@ -977,7 +874,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                   ] else ...[
                     const SizedBox(height: 24),
 
-                    // --- Move: Orange info box above ---
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(16),
@@ -1012,7 +908,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
                     const SizedBox(height: 24),
 
-                    // --- Nutritional Info Example Card ---
                     Card(
                       elevation: 2,
                       shape: RoundedRectangleBorder(
@@ -1058,7 +953,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    // --- End Added ---
 
                     SizedBox(
                       width: double.infinity,
@@ -1089,7 +983,458 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     );
   }
 
-  // New: OCR Review Screen
+  Widget _buildAllFoodsSummary() {
+    double totalCalories = 0;
+    double totalCarbs = 0;
+    double totalProtein = 0;
+    double totalFat = 0;
+
+    for (var food in _foodItems) {
+      if (food.hasNutritionData) {
+        totalCalories += food.getCalories();
+        totalCarbs += food.getCarbs();
+        totalProtein += food.getProtein();
+        totalFat += food.getFat();
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.blue[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+            
+              const SizedBox(width: 8),
+              const Text(
+                'Total Nutritional Summary',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...List.generate(_foodItems.length, (index) {
+            final food = _foodItems[index];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${index + 1}. ${food.foodName ?? "Unknown"}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[800],
+                        fontWeight: index == _currentFoodIndex 
+                            ? FontWeight.bold 
+                            : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  if (food.hasNutritionData)
+                    Text(
+                      '${food.getCalories().toStringAsFixed(0)} kcal',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[800],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }),
+          const Divider(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildSummaryItem('Cal', totalCalories, 'kcal', Colors.orange),
+              _buildSummaryItem('Carbs', totalCarbs, 'g', Colors.blue),
+              _buildSummaryItem('Protein', totalProtein, 'g', Colors.red),
+              _buildSummaryItem('Fat', totalFat, 'g', Colors.yellow[700]!),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryItem(String label, double value, String unit, Color color) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[700],
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value.toStringAsFixed(0),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          unit,
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFoodTabs() {
+    return SizedBox(
+      height: 50,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _foodItems.length,
+        itemBuilder: (context, index) {
+          final isSelected = index == _currentFoodIndex;
+          final food = _foodItems[index];
+          return GestureDetector(
+            onTap: () {
+              setState(() {
+                _currentFoodIndex = index;
+              });
+            },
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.green : Colors.white,
+                borderRadius: BorderRadius.circular(25),
+                border: Border.all(
+                  color: isSelected ? Colors.green : Colors.grey[300]!,
+                  width: 2,
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Item ${index + 1}',
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.black87,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  if (!food.hasNutritionData)
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 14,
+                      color: isSelected ? Colors.white : Colors.orange,
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildQuantityControl() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Quantity',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+              GestureDetector(
+                onTap: _showCustomQuantityDialog,
+                child: Row(
+                  children: [
+                    Text(
+                      '${_currentFood.getTotalQuantity().toStringAsFixed(1)}${_currentFood.servingUnit}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    if (_currentFood.isCustomQuantity)
+                      IconButton(
+                        icon: const Icon(Icons.clear, size: 18, color: Colors.red),
+                        onPressed: _clearCustomQuantity,
+                        tooltip: 'Clear custom quantity',
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (!_currentFood.isCustomQuantity) ...[
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey[300]!),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _currentFood.servingUnit,
+                    underline: const SizedBox(),
+                    items: const [
+                      DropdownMenuItem(value: 'g', child: Text('g')),
+                      DropdownMenuItem(value: 'ml', child: Text('ml')),
+                      DropdownMenuItem(value: 'oz', child: Text('oz')),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _currentFood.servingUnit = value!);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      if (_currentFood.wholeQuantity > 0) {
+                        _currentFood.wholeQuantity--;
+                        if (_currentFood.wholeQuantity == 0 && _currentFood.selectedDivision == 10) {
+                          _currentFood.selectedDivision = 0;
+                        }
+                      }
+                    });
+                  },
+                  icon: const Icon(Icons.remove_circle_outline),
+                  color: Colors.red[400],
+                  iconSize: 32,
+                ),
+                Container(
+                  width: 80,
+                  alignment: Alignment.center,
+                  child: Text(
+                    _getQuantityDisplay(),
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _currentFood.wholeQuantity++;
+                    });
+                  },
+                  icon: const Icon(Icons.add_circle_outline),
+                  color: Colors.green[400],
+                  iconSize: 32,
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Fine adjustment (0-10/10):',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: List.generate(
+                10,
+                (index) => Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _currentFood.selectedDivision = index + 1;
+                        if (_currentFood.wholeQuantity == 0 && _currentFood.selectedDivision == 10) {
+                          _currentFood.wholeQuantity = 1;
+                        }
+                      });
+                    },
+                    child: Container(
+                      height: 32,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      decoration: BoxDecoration(
+                        color: (index + 1) <= _currentFood.selectedDivision
+                            ? Colors.red[400]
+                            : Colors.grey[300],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                '${_currentFood.selectedDivision}/10 portions',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNutritionInfo() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Nutritional Information',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Per ${_currentFood.getTotalQuantity().toStringAsFixed(0)}${_currentFood.servingUnit}',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _buildNutritionRow(
+            'Calories',
+            _currentFood.getCalories().toStringAsFixed(1),
+            'kcal',
+            Colors.orange,
+          ),
+          const Divider(height: 24),
+          _buildNutritionRow(
+            'Carbohydrates',
+            _currentFood.getCarbs().toStringAsFixed(1),
+            'g',
+            Colors.blue,
+          ),
+          const Divider(height: 24),
+          _buildNutritionRow(
+            'Protein',
+            _currentFood.getProtein().toStringAsFixed(1),
+            'g',
+            Colors.red,
+          ),
+          const Divider(height: 24),
+          _buildNutritionRow(
+            'Fat',
+            _currentFood.getFat().toStringAsFixed(1),
+            'g',
+            Colors.yellow[700]!,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNutritionRow(
+    String label,
+    String value,
+    String unit,
+    Color color,
+  ) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey[300]!),
+          ),
+          child: Row(
+            children: [
+              Text(
+                value.isEmpty ? '0.0' : value,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                unit,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildOcrReviewScreen() {
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -1152,7 +1497,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             
             const SizedBox(height: 16),
             
-            // Editable nutrition fields
             _buildOcrEditField(
               'Calories',
               _ocrCaloriesController,
@@ -1193,7 +1537,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             
             const SizedBox(height: 32),
             
-            // Confirm button
             SizedBox(
               width: double.infinity,
               height: 56,
@@ -1286,138 +1629,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildNutritionInfo() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Nutritional Information',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.black,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Per ${_getTotalQuantity().toStringAsFixed(0)}$_selectedUnit',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
-          ),
-          const SizedBox(height: 16),
-          
-          _buildNutritionRow(
-            'Calories',
-            _caloriesController,
-            'kcal',
-            Colors.orange,
-          ),
-          const Divider(height: 24),
-          _buildNutritionRow(
-            'Carbohydrates',
-            _carbsController,
-            'g',
-            Colors.blue,
-          ),
-          const Divider(height: 24),
-          _buildNutritionRow(
-            'Protein',
-            _proteinController,
-            'g',
-            Colors.red,
-          ),
-          const Divider(height: 24),
-          _buildNutritionRow(
-            'Fat',
-            _fatController,
-            'g',
-            Colors.yellow[700]!,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNutritionRow(
-    String label,
-    TextEditingController controller,
-    String unit,
-    Color color,
-  ) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
-            ),
-          ],
-        ),
-        GestureDetector(
-          onTap: () => _showEditDialog(label, controller),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey[300]!),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  controller.text.isEmpty ? '0.0' : controller.text,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  unit,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  Icons.edit,
-                  size: 16,
-                  color: Colors.grey[600],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
