@@ -9,9 +9,11 @@ list(APPEND FLUTTER_PLUGIN_LIST
   firebase_core
   local_auth_windows
   permission_handler_windows
+  printing
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  tflite_flutter
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

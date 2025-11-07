@@ -46,11 +46,16 @@ dependencies:
   local_auth: ^2.1.6
   google_mlkit_text_recognition: ^0.15.0
   fl_chart: ^0.63.0
+  pdf: ^3.10.4
+  printing: ^5.11.1
+  tflite_flutter: ^0.12.1
+  
+  image: ^4.5.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_launcher_icons: ^0.14.1
+  flutter_launcher_icons: ^0.14.4
 
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -70,6 +75,10 @@ flutter:
     - assets/logo2.png
     - assets/rice-chicken.jpg
     - assets/nutritional_info.png
+    - assets/uec_unet.tflite
+    - assets/food101.tflite
+    - assets/kenyanfood.tflite
+    - assets/uec_unet_int8.tflite
 
 flutter_icons:
   android: true

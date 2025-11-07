@@ -7,6 +7,7 @@ import 'package:barcode_scan2/barcode_scan2.dart';
 import 'meal_summary.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'food_recognition.dart';
 
 class LogFoodModal extends StatefulWidget {
   const LogFoodModal({Key? key}) : super(key: key);
@@ -117,7 +118,6 @@ class _LogFoodModalState extends State<LogFoodModal> {
   }
 
   Future<void> _handleGalleryTap() async {
-    Navigator.of(context).pop(); // Close the input options sheet
     try {
       PermissionStatus permission;
       if (Platform.isIOS) {
@@ -162,7 +162,17 @@ class _LogFoodModalState extends State<LogFoodModal> {
         imageQuality: 85,
       );
       if (image != null) {
-        Navigator.pop(context); // Close the modal
+        Navigator.of(context).pop(); // Close the input options sheet/modal
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => FoodRecognitionPage(
+              mealType: selectedMeal!,
+              imageFile: image,
+            ),
+          ),
+        );
       }
     } catch (e) {
       _showErrorSnackBar('Failed to access gallery: ${e.toString()}');
@@ -194,7 +204,16 @@ class _LogFoodModalState extends State<LogFoodModal> {
         imageQuality: 85,
       );
       if (image != null) {
-        Navigator.pop(context); // Close the modal
+        // Navigator.pop(context); // Close the modal
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => FoodRecognitionPage(
+              mealType: selectedMeal!,
+              imageFile: image,
+            ),
+          ),
+        );
       }
     } catch (e) {
       _showErrorSnackBar('Failed to access camera: ${e.toString()}');
@@ -280,7 +299,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
         // Try to extract product name from the main result table
         final tableMatch = RegExp(r'<table[^>]*class="[^"]*search-results[^"]*"[^>]*>([\s\S]*?)</table>', caseSensitive: false).firstMatch(html);
         if (tableMatch != null) {
-          final tableHtml = tableMatch.group(1) ?? '';
+          final tableHtml = tableMatch.group(1) ?? ''; 
           // Look for a row with "Product Name"
           final rowMatch = RegExp(r'<tr>[\s\S]*?<td[^>]*>Product Name:?<\/td>[\s\S]*?<td[^>]*>([^<]+)<\/td>', caseSensitive: false).firstMatch(tableHtml);
           if (rowMatch != null) {
@@ -605,6 +624,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
   }
 
   void _showErrorSnackBar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
