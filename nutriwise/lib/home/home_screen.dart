@@ -729,6 +729,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           proteinConsumed += _safeNum(meal['protein']);
                           fatConsumed += _safeNum(meal['fat']);
                         }
+                        
+                        // Calculate if goals are met/exceeded
+                        bool caloriesGoalMet = caloriesConsumed >= dailyGoal;
+                        bool carbsGoalMet = carbsConsumed >= carbsTarget;
+                        bool proteinGoalMet = proteinConsumed >= proteinTarget;
+                        bool fatGoalMet = fatConsumed >= fatTarget;
+                        
                         return SingleChildScrollView(
                           padding: const EdgeInsets.all(12.0),
                           child: Column(
@@ -797,15 +804,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                             size: const Size(120, 120),
                                             painter: SemiCircleProgressPainter(
                                               progress: dailyGoal > 0
-                                                  ? caloriesConsumed / dailyGoal
+                                                  ? (caloriesConsumed / dailyGoal).clamp(0.0, 1.0)
                                                   : 0,
                                               backgroundColor: Colors.grey[200]!,
-                                              progressColor: const Color.fromARGB(
-                                                255,
-                                                47,
-                                                222,
-                                                38,
-                                              ),
+                                              progressColor: caloriesGoalMet 
+                                                  ? Colors.green 
+                                                  : const Color.fromARGB(255, 47, 222, 38),
                                               strokeWidth: 8,
                                             ),
                                           ),
@@ -813,23 +817,57 @@ class _HomeScreenState extends State<HomeScreen> {
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                Text(
-                                                  dailyGoal > 0
-                                                      ? '${dailyGoal - caloriesConsumed}'
-                                                      : '-',
-                                                  style: const TextStyle(
-                                                    fontSize: 22,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.black87,
+                                                if (caloriesGoalMet) ...[
+                                                  const Text(
+                                                    '✓',
+                                                    style: TextStyle(
+                                                      fontSize: 32,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.green,
+                                                    ),
                                                   ),
-                                                ),
-                                                Text(
-                                                  'kcal left',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey[600],
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    'Over by',
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: Colors.grey[600],
+                                                    ),
                                                   ),
-                                                ),
+                                                  Text(
+                                                    '${caloriesConsumed - dailyGoal}',
+                                                    style: const TextStyle(
+                                                      fontSize: 16,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.orange,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    'kcal',
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: Colors.grey[600],
+                                                    ),
+                                                  ),
+                                                ] else ...[
+                                                  Text(
+                                                    dailyGoal > 0
+                                                        ? '${dailyGoal - caloriesConsumed}'
+                                                        : '-',
+                                                    style: const TextStyle(
+                                                      fontSize: 22,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.black87,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    'kcal left',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey[600],
+                                                    ),
+                                                  ),
+                                                ],
                                               ],
                                             ),
                                           ),
@@ -846,18 +884,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                           carbsConsumed,
                                           carbsTarget,
                                           Colors.orange,
+                                          carbsGoalMet,
                                         ),
                                         _buildMacroCircle(
                                           'Protein',
                                           proteinConsumed,
                                           proteinTarget,
                                           Colors.red,
+                                          proteinGoalMet,
                                         ),
                                         _buildMacroCircle(
                                           'Fat',
                                           fatConsumed,
                                           fatTarget,
                                           Colors.blue,
+                                          fatGoalMet,
                                         ),
                                       ],
                                     ),
@@ -1053,9 +1094,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Widget _buildMacroCircle(String name, int current, int target, Color color) {
-    double progress = target > 0 ? current / target : 0;
-    int left = target - current;
+  Widget _buildMacroCircle(
+    String name, 
+    int current, 
+    int target, 
+    Color color,
+    bool goalMet,
+  ) {
+    double progress = target > 0 ? (current / target).clamp(0.0, 1.0) : 0;
+    int difference = current - target;
+    
     return Column(
       children: [
         Text(
@@ -1078,7 +1126,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 painter: SemiCircleProgressPainter(
                   progress: progress,
                   backgroundColor: Colors.grey[200]!,
-                  progressColor: color,
+                  progressColor: goalMet ? Colors.green : color,
                   strokeWidth: 4,
                 ),
               ),
@@ -1086,18 +1134,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      '$current',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                    if (goalMet) ...[
+                      const Text(
+                        '✓',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                        ),
                       ),
-                    ),
-                    Text(
-                      '/${target}g',
-                      style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                    ),
+                    ] else ...[
+                      Text(
+                        '$current',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        '/${target}g',
+                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1105,10 +1164,20 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         const SizedBox(height: 4),
-        Text(
-          '${left}g left',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-        ),
+        if (goalMet)
+          Text(
+            '+${difference}g',
+            style: TextStyle(
+              fontSize: 12, 
+              color: Colors.orange,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        else
+          Text(
+            '${target - current}g left',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
       ],
     );
   }
@@ -1145,7 +1214,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-// Add this helper function inside _HomeScreenState:
+  // Add this helper function inside _HomeScreenState:
   int _safeNum(dynamic value) {
     if (value == null) return 0;
     if (value is int) return value;
