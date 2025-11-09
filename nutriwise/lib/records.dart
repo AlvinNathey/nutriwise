@@ -2814,6 +2814,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       ),
     );
   }
+  
 
   pw.Widget _buildPDFTableCell(String text, {bool isHeader = false}) {
     return pw.Padding(
