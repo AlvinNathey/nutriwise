@@ -98,11 +98,10 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
       'Dinner': 0,
       'Snack': 0,
     };
-    // New: Map day -> Set of meal types
     Map<int, Set<String>> dayMealTypes = {};
 
-    // Query meals for the month
-    final snapshot = await FirebaseFirestore.instance
+    // --- Fetch from barcodes ---
+    final barcodeSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
@@ -110,13 +109,45 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
         .get();
 
-    for (var doc in snapshot.docs) {
+    for (var doc in barcodeSnapshot.docs) {
       final data = doc.data();
       final createdAt = data['createdAt'];
       final calories = (data['calories'] ?? 0).round();
       String mealType = (data['mealType'] ?? 'Meal').toString().trim();
 
-      // Normalize snack types
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
+
+      if (createdAt is Timestamp) {
+        final date = createdAt.toDate();
+        final day = date.day;
+        calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
+        if (mealTypeCounts.containsKey(mealType)) {
+          mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+        }
+        dayMealTypes.putIfAbsent(day, () => <String>{});
+        dayMealTypes[day]!.add(mealType);
+      }
+    }
+
+    // --- Fetch from meals ---
+    final mealsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('meals')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
+        .get();
+
+    for (var doc in mealsSnapshot.docs) {
+      final data = doc.data();
+      final createdAt = data['createdAt'];
+      final calories = (data['totalCalories'] ?? 0).round();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
       if (mealType == 'Breakfast Snack' ||
           mealType == 'Afternoon Snack' ||
           mealType == 'Midnight Snack') {
@@ -138,7 +169,7 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
     setState(() {
       _calorieData = calorieData;
       _mealTypeCounts = mealTypeCounts;
-      _dayMealTypes = dayMealTypes; // Store for calendar rendering
+      _dayMealTypes = dayMealTypes;
     });
   }
 
@@ -921,8 +952,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .get();
       final userData = userDoc.data() ?? {};
 
-      // Fetch meals data
-      final mealsSnapshot = await FirebaseFirestore.instance
+      // --- Fetch meals from barcodes ---
+      final barcodeSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('barcodes')
@@ -930,7 +961,16 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate))
           .get();
 
-      // Fetch weight entries
+      // --- Fetch meals from meals ---
+      final mealsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('meals')
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate))
+          .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate))
+          .get();
+
+      // --- Fetch weight entries (unchanged) ---
       final weightSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -940,12 +980,55 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .orderBy('timestamp', descending: false)
           .get();
 
-      // Process data
+      // --- Merge barcode and meals data ---
+      List<Map<String, dynamic>> allMeals = [];
+      for (var doc in barcodeSnapshot.docs) {
+        final data = doc.data();
+        allMeals.add({
+          'name': data['foodName'] ?? 'Unknown',
+          'mealType': (data['mealType'] ?? 'Meal').toString().trim(),
+          'calories': (data['calories'] ?? 0).toDouble(),
+          'protein': (data['protein'] ?? 0).toDouble(),
+          'carbs': (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble(),
+          'fat': (data['fat'] ?? 0).toDouble(),
+          'date': data['createdAt'] is Timestamp
+              ? (data['createdAt'] as Timestamp).toDate()
+              : DateTime.now(),
+          'imageUrl': null, // No image for barcode logs
+        });
+      }
+      for (var doc in mealsSnapshot.docs) {
+        final data = doc.data();
+        // Show all food names comma separated
+        String foodNames = '';
+        if (data['foodItems'] is List && (data['foodItems'] as List).isNotEmpty) {
+          foodNames = (data['foodItems'] as List)
+              .map((f) => (f['foodName'] ?? '') as String)
+              .where((n) => n.isNotEmpty)
+              .join(', ');
+        } else {
+          foodNames = (data['mealType'] ?? 'Meal').toString();
+        }
+        allMeals.add({
+          'name': foodNames,
+          'mealType': (data['mealType'] ?? 'Meal').toString().trim(),
+          'calories': (data['totalCalories'] ?? 0).toDouble(),
+          'protein': (data['totalProtein'] ?? 0).toDouble(),
+          'carbs': (data['totalCarbs'] ?? 0).toDouble(),
+          'fat': (data['totalFat'] ?? 0).toDouble(),
+          'date': data['createdAt'] is Timestamp
+              ? (data['createdAt'] as Timestamp).toDate()
+              : DateTime.now(),
+          'imageUrl': data['originalImageUrl'] as String?,
+        });
+      }
+
+      // --- Process merged meals ---
       Map<String, dynamic> reportData = {
         'userName': userData['name'] ?? 'User',
         'userEmail': user.email ?? '',
         'targetCalories': userData['calories']?.round() ?? 0,
-        'totalMeals': mealsSnapshot.docs.length,
+        'totalMeals': allMeals.length,
         'totalCalories': 0.0,
         'totalProtein': 0.0,
         'totalCarbs': 0.0,
@@ -961,16 +1044,13 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         'mealsDetails': <Map<String, dynamic>>[],
       };
 
-      // Process meals
-      for (var doc in mealsSnapshot.docs) {
-        final data = doc.data();
-        
-        reportData['totalCalories'] += (data['calories'] ?? 0).toDouble();
-        reportData['totalProtein'] += (data['protein'] ?? 0).toDouble();
-        reportData['totalCarbs'] += (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble();
-        reportData['totalFat'] += (data['fat'] ?? 0).toDouble();
+      for (var meal in allMeals) {
+        reportData['totalCalories'] += (meal['calories'] ?? 0).toDouble();
+        reportData['totalProtein'] += (meal['protein'] ?? 0).toDouble();
+        reportData['totalCarbs'] += (meal['carbs'] ?? 0).toDouble();
+        reportData['totalFat'] += (meal['fat'] ?? 0).toDouble();
 
-        String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+        String mealType = (meal['mealType'] ?? 'Meal').toString().trim();
         if (mealType == 'Breakfast Snack' ||
             mealType == 'Afternoon Snack' ||
             mealType == 'Midnight Snack') {
@@ -982,35 +1062,24 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         }
 
         // Track daily calories
-        if (data['createdAt'] is Timestamp) {
-          final date = (data['createdAt'] as Timestamp).toDate();
-          final dateKey = DateFormat('yyyy-MM-dd').format(date);
-          reportData['dailyCalories'][dateKey] = 
-              (reportData['dailyCalories'][dateKey] ?? 0.0) + (data['calories'] ?? 0).toDouble();
+        if (meal['date'] is DateTime) {
+          final dateKey = DateFormat('yyyy-MM-dd').format(meal['date'] as DateTime);
+          reportData['dailyCalories'][dateKey] =
+              (reportData['dailyCalories'][dateKey] ?? 0.0) + (meal['calories'] ?? 0).toDouble();
         }
 
         // Store meal details
-        reportData['mealsDetails'].add({
-          'name': data['foodName'] ?? 'Unknown',
-          'mealType': mealType,
-          'calories': (data['calories'] ?? 0).toDouble(),
-          'protein': (data['protein'] ?? 0).toDouble(),
-          'carbs': (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble(),
-          'fat': (data['fat'] ?? 0).toDouble(),
-          'date': data['createdAt'] is Timestamp 
-              ? (data['createdAt'] as Timestamp).toDate() 
-              : DateTime.now(),
-        });
+        reportData['mealsDetails'].add(meal);
       }
 
-      // Process weight entries
+      // --- Process weight entries (unchanged) ---
       for (var doc in weightSnapshot.docs) {
         final data = doc.data();
         reportData['weightEntries'].add({
           'weight': (data['weight'] ?? 0).toDouble(),
           'isMetric': data['isMetric'] == true,
-          'timestamp': data['timestamp'] is Timestamp 
-              ? (data['timestamp'] as Timestamp).toDate() 
+          'timestamp': data['timestamp'] is Timestamp
+              ? (data['timestamp'] as Timestamp).toDate()
               : DateTime.now(),
         });
       }
@@ -1427,7 +1496,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Widget _buildMacroRow(String label, double total, double avg, Color color) {
@@ -1565,9 +1634,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                     ),
                   ),
                 ],
-              )
-            else
-              Center(
+              ),
+             Center(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text('No meal data', style: TextStyle(color: Colors.grey[600])),
@@ -1576,7 +1644,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Widget _buildMealTypeRow(String label, int count, int total, Color color) {
@@ -1710,7 +1778,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
                           int idx = value.toInt();
-                          if (idx >= 0 && idx < weightEntries.length) {final date = weightEntries[idx]['timestamp'] as DateTime;
+                          if (idx >= 0 && idx < weightEntries.length) {
+                            final date = weightEntries[idx]['timestamp'] as DateTime;
                             return Text(
                               '${date.day}/${date.month}',
                               style: const TextStyle(fontSize: 10),
@@ -1747,7 +1816,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Widget _buildWeightStat(String label, double value, String unit, Color color, {String prefix = ''}) {
@@ -1775,7 +1844,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
   Widget _buildDailyCaloriesSection() {
     final dailyCalories = _reportData['dailyCalories'] as Map<String, double>;
-    
     if (dailyCalories.isEmpty) {
       return Card(
         elevation: 2,
@@ -1792,12 +1860,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   color: Colors.green[700],
                 ),
               ),
-              const SizedBox(height: 16),
-              Center(
-                child: Text(
-                  'No daily calorie data',
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
+              const SizedBox(height: 12),
+              Text(
+                'No daily calorie data available.',
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
               ),
             ],
           ),
@@ -1805,32 +1871,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       );
     }
 
-    // Sort by date and prepare chart data
     final sortedDates = dailyCalories.keys.toList()..sort();
-    List<BarChartGroupData> barGroups = [];
-    
-    for (int i = 0; i < sortedDates.length && i < 30; i++) {
-      final date = sortedDates[i];
-      final calories = dailyCalories[date] ?? 0;
-      barGroups.add(
-        BarChartGroupData(
-          x: i,
-          barRods: [
-            BarChartRodData(
-              toY: calories,
-              color: Colors.green,
-              width: 8,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Ensure maxCalories is double
-    final maxCalories = dailyCalories.values.reduce((a, b) => a > b ? a : b).toDouble();
-    final targetCalories = (_reportData['targetCalories'] ?? 0).toDouble();
-
     return Card(
       elevation: 2,
       child: Padding(
@@ -1841,86 +1882,46 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
             Text(
               'Daily Calorie Intake',
               style: TextStyle(
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Colors.green[700],
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Last ${sortedDates.length > 30 ? '30' : sortedDates.length} days',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 200,
-              child: BarChart(
-                BarChartData(
-                  alignment: BarChartAlignment.spaceAround,
-                  maxY: maxCalories > targetCalories ? maxCalories + 500.0 : targetCalories + 500.0,
-                  barGroups: barGroups,
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                  ),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 40,
-                        getTitlesWidget: (value, meta) {
-                          return Text(
-                            value.toInt().toString(),
-                            style: const TextStyle(fontSize: 10),
-                          );
-                        },
-                      ),
+            const SizedBox(height: 12),
+            // Flutter Table widget for daily calories
+            Table(
+              border: TableBorder.all(color: Colors.grey[300]!),
+              columnWidths: const {
+                0: FlexColumnWidth(2),
+                1: FlexColumnWidth(1),
+              },
+              children: [
+                TableRow(
+                  decoration: BoxDecoration(color: Colors.grey[200]),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text('Date', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        interval: sortedDates.length > 15 ? 5 : 1,
-                        getTitlesWidget: (value, meta) {
-                          int idx = value.toInt();
-                          if (idx >= 0 && idx < sortedDates.length) {
-                            final date = DateTime.parse(sortedDates[idx]);
-                            return Text(
-                              '${date.day}/${date.month}',
-                              style: const TextStyle(fontSize: 10),
-                            );
-                          }
-                          return const Text('');
-                        },
-                      ),
+                    Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text('Calories', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
-                    topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  extraLinesData: targetCalories > 0
-                      ? ExtraLinesData(
-                          horizontalLines: [
-                            HorizontalLine(
-                              y: targetCalories,
-                              color: Colors.red,
-                              strokeWidth: 2,
-                              dashArray: [8, 4],
-                              label: HorizontalLineLabel(
-                                show: true,
-                                alignment: Alignment.topRight,
-                                style: const TextStyle(
-                                  color: Colors.red,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                                labelResolver: (_) => 'Target',
-                              ),
-                            ),
-                          ],
-                        )
-                      : ExtraLinesData(),
+                  ],
                 ),
-              ),
+                ...sortedDates.map((date) => TableRow(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text(date),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text('${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}'),
+                    ),
+                  ],
+                )),
+              ],
             ),
           ],
         ),
@@ -1930,7 +1931,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
   Widget _buildTopMealsSection() {
     final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
-    
     if (mealsDetails.isEmpty) {
       return Card(
         elevation: 2,
@@ -1990,27 +1990,45 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                 final meal = topMeals[index];
                 final mealType = meal['mealType'] as String;
                 final color = mealTypeColors[mealType] ?? Colors.grey;
-                
+                final imageUrl = meal['imageUrl'] as String?;
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.2),
+                    // Show image if available (left side)
+                    if (imageUrl != null && imageUrl.isNotEmpty)
+                      ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          '${index + 1}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: color,
+                        child: Image.network(
+                          imageUrl,
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Container(
+                            width: 48,
+                            height: 48,
+                            color: Colors.grey[200],
+                            child: const Icon(Icons.image, color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${index + 1}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: color,
+                            ),
                           ),
                         ),
                       ),
-                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -2103,14 +2121,13 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Future<void> _generatePDF() async {
     try {
       final pdf = pw.Document();
 
-      // Add pages to PDF
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
@@ -2126,14 +2143,17 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
             pw.SizedBox(height: 20),
             _buildPDFWeightTracking(),
             pw.SizedBox(height: 20),
+            _buildPDFDailyCalories(),
+            pw.SizedBox(height: 20),
             _buildPDFTopMeals(),
+            pw.SizedBox(height: 20),
+            _buildPDFMealDetailsTable(),
             pw.SizedBox(height: 30),
             _buildPDFFooter(),
           ],
         ),
       );
 
-      // Show PDF preview and download
       await Printing.layoutPdf(
         onLayout: (PdfPageFormat format) async => pdf.save(),
         name: 'NutriWise_Report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
@@ -2484,28 +2504,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     if (weightEntries.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: PdfColors.grey300),
-          borderRadius: pw.BorderRadius.circular(8),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(
-              'Weight Tracking',
-              style: pw.TextStyle(
-                fontSize: 16,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.green700,
-              ),
-            ),
-            pw.SizedBox(height: 12),
-            pw.Text(
-              'No weight data available for this period',
-              style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey),
-            ),
-          ],
-        ),
+        child: pw.Text('No weight data available for this period.', style: const pw.TextStyle(fontSize: 12)),
       );
     }
 
@@ -2588,38 +2587,68 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     );
   }
 
+  pw.Widget _buildPDFDailyCalories() {
+    final dailyCalories = _reportData['dailyCalories'] as Map<String, double>;
+    if (dailyCalories.isEmpty) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(16),
+        child: pw.Text('No daily calorie data available.', style: const pw.TextStyle(fontSize: 12)),
+      );
+    }
+    final sortedDates = dailyCalories.keys.toList()..sort();
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(16),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'Daily Calorie Intake',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.green700,
+            ),
+          ),
+          pw.SizedBox(height: 12),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(2),
+              1: const pw.FlexColumnWidth(1),
+            },
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                children: [
+                  _buildPDFTableCell('Date', isHeader: true),
+                  _buildPDFTableCell('Calories', isHeader: true),
+                ],
+              ),
+              ...sortedDates.map((date) => pw.TableRow(
+                children: [
+                  _buildPDFTableCell(date),
+                  _buildPDFTableCell('${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}'),
+                ],
+              )),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   pw.Widget _buildPDFTopMeals() {
     final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
-
     if (mealsDetails.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: PdfColors.grey300),
-          borderRadius: pw.BorderRadius.circular(8),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(
-              'Top Meals by Calories',
-              style: pw.TextStyle(
-                fontSize: 16,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.green700,
-              ),
-            ),
-            pw.SizedBox(height: 12),
-            pw.Text(
-              'No meal data available',
-              style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey),
-            ),
-          ],
-        ),
+        child: pw.Text('No meal data available.', style: const pw.TextStyle(fontSize: 12)),
       );
     }
-
-    // Sort meals by calories and take top 10
     final sortedMeals = List<Map<String, dynamic>>.from(mealsDetails);
     sortedMeals.sort((a, b) => (b['calories'] as double).compareTo(a['calories'] as double));
     final topMeals = sortedMeals.take(10).toList();
@@ -2652,7 +2681,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               4: const pw.FlexColumnWidth(1),
             },
             children: [
-              // Header row
               pw.TableRow(
                 decoration: const pw.BoxDecoration(color: PdfColors.grey200),
                 children: [
@@ -2663,7 +2691,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   _buildPDFTableCell('Calories', isHeader: true),
                 ],
               ),
-              // Data rows
               ...topMeals.asMap().entries.map((entry) {
                 final index = entry.key;
                 final meal = entry.value;
@@ -2672,11 +2699,115 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                     _buildPDFTableCell('${index + 1}'),
                     _buildPDFTableCell(meal['name'] as String),
                     _buildPDFTableCell(meal['mealType'] as String),
-                    _buildPDFTableCell(DateFormat('MM/dd').format(meal['date'] as DateTime)),
+                    _buildPDFTableCell(meal['date'] is DateTime
+                      ? DateFormat('MM/dd').format(meal['date'] as DateTime)
+                      : ''),
                     _buildPDFTableCell('${(meal['calories'] as double).toStringAsFixed(0)}'),
                   ],
                 );
               }).toList(),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPDFMealDetailsTable() {
+    final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+    if (mealsDetails.isEmpty) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(16),
+        child: pw.Text('No meal details available.', style: const pw.TextStyle(fontSize: 12)),
+      );
+    }
+    // Show all meals in a table with food names, meal type, date, calories, protein, carbs, fat, quantity
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(16),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'All Meals Details',
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.green700,
+            ),
+          ),
+          pw.SizedBox(height: 12),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(3),
+              1: const pw.FlexColumnWidth(1.5),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(1),
+              4: const pw.FlexColumnWidth(1),
+              5: const pw.FlexColumnWidth(1),
+              6: const pw.FlexColumnWidth(1),
+              7: const pw.FlexColumnWidth(1),
+            },
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                children: [
+                  _buildPDFTableCell('Food Names', isHeader: true),
+                  _buildPDFTableCell('Type', isHeader: true),
+                  _buildPDFTableCell('Date', isHeader: true),
+                  _buildPDFTableCell('Created At', isHeader: true),
+                  _buildPDFTableCell('Calories', isHeader: true),
+                  _buildPDFTableCell('Protein', isHeader: true),
+                  _buildPDFTableCell('Carbs', isHeader: true),
+                  _buildPDFTableCell('Fat', isHeader: true),
+                  _buildPDFTableCell('Quantity', isHeader: true),
+                ],
+              ),
+              ...mealsDetails.map((meal) {
+                // Try to get quantity from meal or foodItems
+                String quantityStr = '';
+                if (meal.containsKey('quantity')) {
+                  quantityStr = '${meal['quantity']}';
+                } else if (meal.containsKey('foodItems') && meal['foodItems'] is List && (meal['foodItems'] as List).isNotEmpty) {
+                  // Sum all gramsAmount if available
+                  final items = meal['foodItems'] as List;
+                  double totalQty = 0;
+                  for (var item in items) {
+                    if (item is Map && item.containsKey('gramsAmount')) {
+                      totalQty += (item['gramsAmount'] ?? 0).toDouble();
+                    }
+                  }
+                  if (totalQty > 0) {
+                    quantityStr = totalQty.toStringAsFixed(0);
+                  }
+                }
+                // CreatedAt
+                String createdAtStr = '';
+                if (meal['date'] != null && meal['date'] is DateTime) {
+                  createdAtStr = DateFormat('yyyy-MM-dd HH:mm').format(meal['date'] as DateTime);
+                } else if (meal['createdAt'] != null && meal['createdAt'] is DateTime) {
+                  createdAtStr = DateFormat('yyyy-MM-dd HH:mm').format(meal['createdAt'] as DateTime);
+                }
+                return pw.TableRow(
+                  children: [
+                    _buildPDFTableCell(meal['name'] as String),
+                    _buildPDFTableCell(meal['mealType'] as String),
+                    _buildPDFTableCell(meal['date'] is DateTime
+                      ? DateFormat('MM/dd').format(meal['date'] as DateTime)
+                      : ''),
+                    _buildPDFTableCell(createdAtStr),
+                    _buildPDFTableCell('${(meal['calories'] as double).toStringAsFixed(0)}'),
+                    _buildPDFTableCell('${(meal['protein'] as double).toStringAsFixed(1)}'),
+                    _buildPDFTableCell('${(meal['carbs'] as double).toStringAsFixed(1)}'),
+                    _buildPDFTableCell('${(meal['fat'] as double).toStringAsFixed(1)}'),
+                    _buildPDFTableCell(quantityStr),
+                  ],
+                );
+              }),
             ],
           ),
         ],
@@ -2790,15 +2921,14 @@ class _NutrientsPageState extends State<NutrientsPage> {
       });
       return;
     }
-    // Calculate week range
     final now = DateTime.now();
     final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
 
-    // Query meals for the week
-    final snapshot = await FirebaseFirestore.instance
+    // --- Fetch from barcodes ---
+    final barcodeSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
@@ -2806,11 +2936,30 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
+    // --- Fetch from meals ---
+    final mealsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('meals')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
     Map<int, int> weekIntake = {};
-    for (var doc in snapshot.docs) {
+    for (var doc in barcodeSnapshot.docs) {
       final data = doc.data();
       final createdAt = data['createdAt'];
       final calories = (data['calories'] ?? 0).round();
+      if (createdAt is Timestamp) {
+        final date = createdAt.toDate();
+        final weekday = date.weekday; // 1=Mon, 7=Sun
+        weekIntake[weekday] = ((weekIntake[weekday] ?? 0) + calories).toInt();
+      }
+    }
+    for (var doc in mealsSnapshot.docs) {
+      final data = doc.data();
+      final createdAt = data['createdAt'];
+      final calories = (data['totalCalories'] ?? 0).round();
       if (createdAt is Timestamp) {
         final date = createdAt.toDate();
         final weekday = date.weekday; // 1=Mon, 7=Sun
@@ -2847,10 +2996,20 @@ class _NutrientsPageState extends State<NutrientsPage> {
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
 
-    final snapshot = await FirebaseFirestore.instance
+    // --- Fetch from barcodes ---
+    final barcodeSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
+    // --- Fetch from meals ---
+    final mealsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('meals')
         .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
@@ -2868,17 +3027,27 @@ class _NutrientsPageState extends State<NutrientsPage> {
       'Snack': [],
     };
 
-    for (var doc in snapshot.docs) {
+    for (var doc in barcodeSnapshot.docs) {
       final data = doc.data();
       String mealType = (data['mealType'] ?? 'Meal').toString().trim();
-
-      // Normalize snack types
       if (mealType == 'Breakfast Snack' ||
           mealType == 'Afternoon Snack' ||
           mealType == 'Midnight Snack') {
         mealType = 'Snack';
       }
-
+      if (mealCounts.containsKey(mealType)) {
+        mealCounts[mealType] = mealCounts[mealType]! + 1;
+        mealMacros[mealType]!.add(data);
+      }
+    }
+    for (var doc in mealsSnapshot.docs) {
+      final data = doc.data();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
       if (mealCounts.containsKey(mealType)) {
         mealCounts[mealType] = mealCounts[mealType]! + 1;
         mealMacros[mealType]!.add(data);
@@ -2905,7 +3074,8 @@ class _NutrientsPageState extends State<NutrientsPage> {
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
 
-    final snapshot = await FirebaseFirestore.instance
+    // --- Fetch from barcodes ---
+    final barcodeSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
@@ -2913,14 +3083,29 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
+    // --- Fetch from meals ---
+    final mealsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('meals')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
     double totalCarbs = 0;
     double totalProtein = 0;
     double totalFat = 0;
-    for (var doc in snapshot.docs) {
+    for (var doc in barcodeSnapshot.docs) {
       final data = doc.data();
       totalCarbs += (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble();
       totalProtein += (data['protein'] ?? 0).toDouble();
       totalFat += (data['fat'] ?? 0).toDouble();
+    }
+    for (var doc in mealsSnapshot.docs) {
+      final data = doc.data();
+      totalCarbs += (data['totalCarbs'] ?? 0).toDouble();
+      totalProtein += (data['totalProtein'] ?? 0).toDouble();
+      totalFat += (data['totalFat'] ?? 0).toDouble();
     }
     setState(() {
       _nutritionMacros = {
@@ -3304,13 +3489,11 @@ class _NutrientsPageState extends State<NutrientsPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Widget _buildIntakeTrend() {
     // Days of week
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
     // Prepare bar chart data for the selected week
     List<BarChartGroupData> barGroups = [];
     for (int i = 0; i < 7; i++) {
@@ -3412,11 +3595,15 @@ class _NutrientsPageState extends State<NutrientsPage> {
                           bottomTitles: AxisTitles(
                             sideTitles: SideTitles(
                               showTitles: true,
+                              interval: 1,
                               getTitlesWidget: (value, meta) {
                                 int idx = value.toInt();
-                                if (idx >= 0 && idx < days.length) {
+                                if (idx >= 0 && idx < 7) {
+                                  final now = DateTime.now();
+                                  final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedWeekOffset));
+                                  final date = monday.add(Duration(days: idx));
                                   return Text(
-                                    days[idx],
+                                    '${date.day}/${date.month}',
                                     style: const TextStyle(fontSize: 10),
                                   );
                                 }
@@ -3424,8 +3611,6 @@ class _NutrientsPageState extends State<NutrientsPage> {
                               },
                             ),
                           ),
-                          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         ),
                         borderData: FlBorderData(show: false),
                         extraLinesData: target > 0
@@ -3438,49 +3623,41 @@ class _NutrientsPageState extends State<NutrientsPage> {
                                   label: HorizontalLineLabel(
                                     show: true,
                                     alignment: Alignment.topRight,
-                                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
-                                    labelResolver: (_) => 'Target: ${target.toInt()}',
+                                    style: const TextStyle(
+                                      color: Colors.red,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 10,
+                                    ),
+                                    labelResolver: (_) => 'Target',
                                   ),
                                 ),
                               ])
                             : ExtraLinesData(),
                       ),
                     )
-                  : Center(
-                      child: Text(
-                        'No intake data for this week.',
-                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                      ),
-                    ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildLegendItem(Colors.green, 'Actual'),
-                const SizedBox(width: 16),
-                _buildLegendItem(Colors.red, 'Target'),
-              ],
-            ),
-          ],
+              : Center(
+                  child: Text(
+                    'No intake data for this week.',
+                    style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildLegendItem(Colors.green, 'Actual'),
+                  const SizedBox(width: 16),
+                  _buildLegendItem(Colors.red, 'Target'),
+                ],
+              ),
+            ],
+          ),
         ),
-      ),
-    );
+      );
   }
 
-  BarChartGroupData _makeBarGroup(int x, double actualValue, double targetValue) {
-    return BarChartGroupData(
-      x: x,
-      barRods: [
-        BarChartRodData(
-          toY: actualValue,
-          color: Colors.green,
-          width: 16,
-          borderRadius: BorderRadius.circular(4),
-        ),
-      ],
-    );
-  }
+  // Removed unused _makeBarGroup method
 
   Widget _buildLegendItem(Color color, String label) {
     return Row(
@@ -3635,7 +3812,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
           ],
         ),
       ),
-    );
+      );
   }
 
   Widget _buildMealLegend(Color color, String label) {

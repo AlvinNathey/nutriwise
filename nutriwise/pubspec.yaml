@@ -49,7 +49,7 @@ dependencies:
   pdf: ^3.10.4
   printing: ^5.11.1
   tflite_flutter: ^0.12.1
-  
+  firebase_storage: 13.0.4
   image: ^4.5.4
 
 dev_dependencies:

@@ -478,19 +478,108 @@ class _HomeScreenState extends State<HomeScreen> {
         date.year == selectedDate.year;
   }
 
-  Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return [];
-    final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('barcodes')
-        .where('date', isEqualTo: dateStr)
-        .orderBy('createdAt', descending: true)
-        .get();
-    return snapshot.docs.map((doc) => doc.data()).toList();
+Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return [];
+  
+  final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+  
+  // Fetch from NEW 'meals' collection
+  final mealsSnapshot = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .collection('meals')
+      .where('date', isEqualTo: dateStr)
+      .orderBy('createdAt', descending: true)
+      .get();
+  
+  // Also fetch from OLD 'barcodes' collection for backward compatibility
+  final barcodesSnapshot = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .collection('barcodes')
+      .where('date', isEqualTo: dateStr)
+      .orderBy('createdAt', descending: true)
+      .get();
+  
+  List<Map<String, dynamic>> allMeals = [];
+  
+  // Process NEW meals structure - KEEP AS ONE MEAL (don't split)
+  for (var mealDoc in mealsSnapshot.docs) {
+    final mealData = mealDoc.data();
+    final foodItems = mealData['foodItems'] as List<dynamic>? ?? [];
+    
+    // Combine all food names
+    List<String> foodNames = [];
+    int totalCalories = 0;
+    int totalCarbs = 0;
+    int totalProtein = 0;
+    int totalFat = 0;
+    int totalGrams = 0;
+    
+    for (var foodItem in foodItems) {
+      final foodData = foodItem as Map<String, dynamic>;
+      foodNames.add(foodData['foodName'] ?? 'Unknown');
+      totalCalories += _safeNum(foodData['calories']);
+      totalCarbs += _safeNum(foodData['carbs']);
+      totalProtein += _safeNum(foodData['protein']);
+      totalFat += _safeNum(foodData['fat']);
+      totalGrams += _safeNum(foodData['gramsAmount']);
+    }
+    
+    // Create ONE meal entry with combined data
+    allMeals.add({
+      'foodName': foodNames.join(', '), // "Githeri, Gratin"
+      'foodCount': foodItems.length, // Number of foods in this meal
+      'calories': totalCalories,
+      'carbs': totalCarbs,
+      'protein': totalProtein,
+      'fat': totalFat,
+      'grams': totalGrams,
+      'mealType': mealData['mealType'] ?? 'Meal',
+      'time': mealData['time'] ?? '',
+      'date': mealData['date'] ?? '',
+      'source': 'AI Detection',
+      'imageUrl': mealData['originalImageUrl'],
+      'mealId': mealDoc.id,
+      'createdAt': mealData['createdAt'],
+      'isGrouped': true, // Flag to indicate this is a grouped meal
+    });
   }
+  
+  // Process OLD barcodes structure (backward compatibility)
+  for (var doc in barcodesSnapshot.docs) {
+    final data = doc.data();
+    allMeals.add({
+      'foodName': data['foodName'] ?? 'Unknown',
+      'foodCount': 1,
+      'calories': data['calories'] ?? 0,
+      'carbs': data['carbs'] ?? 0,
+      'protein': data['protein'] ?? 0,
+      'fat': data['fat'] ?? 0,
+      'grams': data['grams'] ?? 100,
+      'mealType': data['mealType'] ?? 'Meal',
+      'time': data['time'] ?? '',
+      'date': data['date'] ?? '',
+      'source': 'Barcode',
+      'createdAt': data['timestamp'] ?? data['createdAt'],
+      'isGrouped': false,
+    });
+  }
+  
+  // Sort by creation time (most recent first)
+  allMeals.sort((a, b) {
+    final aTime = a['createdAt'];
+    final bTime = b['createdAt'];
+    if (aTime == null || bTime == null) return 0;
+    if (aTime is Timestamp && bTime is Timestamp) {
+      return bTime.compareTo(aTime);
+    }
+    return 0;
+  });
+  
+  return allMeals;
+}
 
   @override
   Widget build(BuildContext context) {
@@ -915,129 +1004,201 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 16),
                               ...meals.isEmpty
-                                  ? [
+                                    ? [
                                       Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(12),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.grey.withOpacity(0.08),
-                                              spreadRadius: 1,
-                                              blurRadius: 6,
-                                              offset: const Offset(0, 1),
-                                            ),
-                                          ],
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.grey.withOpacity(0.08),
+                                          spreadRadius: 1,
+                                          blurRadius: 6,
+                                          offset: const Offset(0, 1),
                                         ),
-                                        child: const Center(
-                                          child: Text(
-                                            'No meals logged for this day.',
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              color: Colors.grey,
-                                            ),
-                                          ),
+                                        ],
+                                      ),
+                                      child: const Center(
+                                        child: Text(
+                                        'No meals logged for this day.',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: Colors.grey,
+                                        ),
                                         ),
                                       ),
+                                      ),
                                     ]
-                                  : meals.map((meal) {
+                                    : meals.map((meal) {
+                                      final isAIDetected = meal['source'] == 'AI Detection';
+                                      final foodCount = _safeNum(meal['foodCount']);
+                                      final isGrouped = meal['isGrouped'] == true;
+                                      
                                       return Container(
-                                        width: double.infinity,
-                                        margin: const EdgeInsets.only(bottom: 12),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white,
-                                          borderRadius: BorderRadius.circular(12),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.grey.withOpacity(0.08),
-                                              spreadRadius: 1,
-                                              blurRadius: 6,
-                                              offset: const Offset(0, 1),
-                                            ),
-                                          ],
+                                      width: double.infinity,
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.grey.withOpacity(0.08),
+                                          spreadRadius: 1,
+                                          blurRadius: 6,
+                                          offset: const Offset(0, 1),
                                         ),
-                                        child: Column(
+                                        ],
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                        // Food name(s) and calories row
+                                        Row(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Row(
-                                              children: [
-                                                Text(
-                                                  meal['foodName']?.toString() ?? 'Unknown Food',
-                                                  style: const TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: Colors.black87,
-                                                  ),
+                                          Expanded(
+                                            child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                              meal['foodName']?.toString() ?? 'Unknown Food',
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                                color: Colors.black87,
+                                              ),
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                              ),
+                                              // Show food count badge if multiple items
+                                              if (isGrouped && foodCount > 1) ...[
+                                              const SizedBox(height: 4),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 2,
                                                 ),
-                                                const Spacer(),
-                                                Text(
-                                                  '${_safeNum(meal['calories'])} kcal',
-                                                  style: const TextStyle(
-                                                    fontSize: 14,
-                                                    color: Colors.black54,
-                                                  ),
+                                                decoration: BoxDecoration(
+                                                color: Colors.green.withOpacity(0.1),
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(
+                                                  color: Colors.green.withOpacity(0.3),
                                                 ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Row(
-                                              children: [
-                                                Icon(
-                                                  Icons.qr_code_2,
-                                                  size: 14,
-                                                  color: Colors.orange,
                                                 ),
-                                                const SizedBox(width: 4),
-                                                Text(
-                                                  '${meal['mealType']?.toString() ?? 'Meal'} • Barcode scanned',
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.orange,
-                                                    fontWeight: FontWeight.w500,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                if (meal['time'] != null)
-                                                  Text(
-                                                    meal['time'].toString(),
-                                                    style: const TextStyle(
-                                                      fontSize: 12,
-                                                      color: Colors.grey,
-                                                      fontWeight: FontWeight.w400,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 8),
-                                            SingleChildScrollView(
-                                              scrollDirection: Axis.horizontal,
-                                              child: Row(
+                                                child: Row(
+                                                mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  _buildMacroChip(
-                                                    'Carbs',
-                                                    '${_safeNum(meal['carbs'])}g',
-                                                    Colors.orange,
+                                                  Icon(
+                                                  Icons.restaurant,
+                                                  size: 12,
+                                                  color: Colors.green[700],
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                  _buildMacroChip(
-                                                    'Protein',
-                                                    '${_safeNum(meal['protein'])}g',
-                                                    Colors.red,
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                  '$foodCount items',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.green[700],
+                                                    fontWeight: FontWeight.w600,
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                  _buildMacroChip(
-                                                    'Fat',
-                                                    '${_safeNum(meal['fat'])}g',
-                                                    Colors.blue,
                                                   ),
                                                 ],
+                                                ),
                                               ),
+                                              ],
+                                            ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                            children: [
+                                            Text(
+                                              '${_safeNum(meal['calories'])} kcal',
+                                              style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.black87,
+                                              ),
+                                            ),
+                                            if (meal['grams'] != null)
+                                              Text(
+                                              '${_safeNum(meal['grams'])}g',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                              ),
+                                              ),
+                                            ],
+                                          ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        
+                                        // Meal type and source indicator
+                                        Row(
+                                          children: [
+                                          Icon(
+                                            isAIDetected ? Icons.camera_alt : Icons.qr_code_2,
+                                            size: 14,
+                                            color: isAIDetected ? Colors.green : Colors.orange,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                            '${meal['mealType']?.toString() ?? 'Meal'} • ${isAIDetected ? 'AI detected' : 'Barcode scanned'}',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: isAIDetected ? Colors.green : Colors.orange,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            ),
+                                          ),
+                                          if (meal['time'] != null && meal['time'].toString().isNotEmpty)
+                                            Text(
+                                            meal['time'].toString(),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey,
+                                              fontWeight: FontWeight.w400,
+                                            ),
                                             ),
                                           ],
                                         ),
+                                        
+                                        const SizedBox(height: 8),
+                                        
+                                        // Macros chips (showing COMBINED totals)
+                                        SingleChildScrollView(
+                                          scrollDirection: Axis.horizontal,
+                                          child: Row(
+                                          children: [
+                                            _buildMacroChip(
+                                            'Carbs',
+                                            '${_safeNum(meal['carbs'])}g',
+                                            Colors.orange,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            _buildMacroChip(
+                                            'Protein',
+                                            '${_safeNum(meal['protein'])}g',
+                                            Colors.red,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            _buildMacroChip(
+                                            'Fat',
+                                            '${_safeNum(meal['fat'])}g',
+                                            Colors.blue,
+                                            ),
+                                          ],
+                                          ),
+                                        ),
+                                        // No image shown
+                                        ],
+                                      ),
                                       );
                                     }).toList(),
                             ],
