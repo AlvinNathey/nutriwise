@@ -3560,6 +3560,7 @@ Future<void> _saveMealToFirestore() async {
     final totalCalories = _calculateTotalCalories();
     final totalMacros = _calculateTotalMacros();
 
+
     // Step 4: Save ONE document to "meals" subcollection
     print('Saving meal document with ${_segmentedFoods.length} food items...');
     
