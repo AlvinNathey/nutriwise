@@ -4,12 +4,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:nutriwise/food/edit_food_log.dart'; // Import the new edit page
 
 class FoodLog {
-  final String id; // Add document ID
+  final String id;
   final String mealType;
   final String time;
   final String foodName;
   final int calories;
   final DateTime createdAt;
+  final String? imageUrl; // NEW: For meal image
+  final bool isMeal; // NEW: Distinguish meal vs barcode
+  final List<Map<String, dynamic>>? foodItems; // NEW: For meal foods
 
   FoodLog({
     required this.id,
@@ -18,9 +21,13 @@ class FoodLog {
     required this.foodName,
     required this.calories,
     required this.createdAt,
+    this.imageUrl,
+    this.isMeal = false,
+    this.foodItems,
   });
 }
 
+// Fetch barcode logs (old)
 Future<List<FoodLog>> fetchLoggedFoods() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return [];
@@ -44,17 +51,59 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
       timeStr = '${hour == 0 ? 12 : hour}:${date.minute.toString().padLeft(2, '0')} $ampm';
     }
     return FoodLog(
-      id: doc.id, // Pass document ID
+      id: doc.id,
       mealType: (data['mealType'] ?? 'Meal').toString(),
       time: timeStr,
       foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
       calories: (data['calories'] ?? 0).round(),
       createdAt: date,
+      isMeal: false,
     );
   }).toList();
 }
 
-// Helper to group logs by timeline section
+// NEW: Fetch meals from 'meals' subcollection
+Future<List<FoodLog>> fetchMealLogs() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return [];
+
+  final snapshot = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .collection('meals')
+      .orderBy('createdAt', descending: true)
+      .get();
+
+  return snapshot.docs.map((doc) {
+    final data = doc.data();
+    final createdAt = data['createdAt'];
+    DateTime date = DateTime.now();
+    String timeStr = '';
+    if (createdAt is Timestamp) {
+      date = createdAt.toDate();
+      timeStr = (data['time'] ?? '').toString();
+    }
+    // Show first food name or "Meal"
+    String foodName = "Meal";
+    if (data['foodItems'] is List && (data['foodItems'] as List).isNotEmpty) {
+      foodName = (data['foodItems'][0]['foodName'] ?? "Meal").toString();
+    }
+    return FoodLog(
+      id: doc.id,
+      mealType: (data['mealType'] ?? 'Meal').toString(),
+      time: timeStr,
+      foodName: foodName,
+      calories: (data['totalCalories'] ?? 0).round(),
+      createdAt: date,
+      imageUrl: data['originalImageUrl'] as String?,
+      isMeal: true,
+      foodItems: (data['foodItems'] as List<dynamic>?)
+          ?.map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+    );
+  }).toList();
+}
+
+// Helper to group logs by timeline section (barcode + meal logs)
 Map<String, List<FoodLog>> groupLogsByTimeline(List<FoodLog> logs) {
   final now = DateTime.now();
   Map<String, List<FoodLog>> grouped = {};
@@ -109,13 +158,22 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
-    _logsFuture = fetchLoggedFoods();
+    _logsFuture = _fetchAllLogs();
   }
 
   void _refreshLogs() {
     setState(() {
-      _logsFuture = fetchLoggedFoods();
+      _logsFuture = _fetchAllLogs();
     });
+  }
+
+  // NEW: Fetch both barcode logs and meal logs, combine and sort
+  Future<List<FoodLog>> _fetchAllLogs() async {
+    final barcodeLogs = await fetchLoggedFoods();
+    final mealLogs = await fetchMealLogs();
+    final allLogs = [...barcodeLogs, ...mealLogs];
+    allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return allLogs;
   }
 
   @override
@@ -226,7 +284,9 @@ class _HistoryPageState extends State<HistoryPage> {
               child: Column(
                 children: meals.map((meal) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: _buildFoodLogCard(context, meal),
+                  child: meal.isMeal
+                      ? _buildMealLogCard(context, meal)
+                      : _buildFoodLogCard(context, meal),
                 )).toList(),
               ),
             ),
@@ -234,6 +294,127 @@ class _HistoryPageState extends State<HistoryPage> {
           ],
         ),
       ],
+    );
+  }
+
+  // NEW: Card for meal logs (with image on left)
+  Widget _buildMealLogCard(BuildContext context, FoodLog log) {
+    return GestureDetector(
+      onTap: () async {
+        // TODO: Implement meal edit page if needed
+        // await Navigator.of(context).push(...);
+        // _refreshLogs();
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Colors.green.shade200,
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // Image on left
+            ClipRRect(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12),
+              ),
+              child: log.imageUrl != null
+                  ? Image.network(
+                      log.imageUrl!,
+                      width: 80,
+                      height: 80,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 80,
+                        height: 80,
+                        color: Colors.grey[200],
+                        child: const Icon(Icons.image, color: Colors.grey),
+                      ),
+                    )
+                  : Container(
+                      width: 80,
+                      height: 80,
+                      color: Colors.grey[200],
+                      child: const Icon(Icons.image, color: Colors.grey),
+                    ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            log.mealType,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          log.time,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Show all food names, comma separated
+                    if (log.foodItems != null && log.foodItems!.isNotEmpty)
+                      Text(
+                        log.foodItems!
+                            .map((f) => (f['foodName'] as String?) ?? '')
+                            .where((n) => n != null && n!.isNotEmpty)
+                            .map((n) => n!)
+                            .join(', '),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.black87,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      )
+                    else
+                      Text(
+                        log.foodName,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.black87,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${log.calories} kcal',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.green[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
