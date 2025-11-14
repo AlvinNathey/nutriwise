@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math' as math;
-import 'dart:math';
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -14,6 +13,59 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_storage/firebase_storage.dart';
+
+// ============================================================================
+// Configuration Constants (replaces hardcoded values)
+// ============================================================================
+
+/// Segmentation confidence threshold (0.0 to 1.0)
+const double kSegmentationConfidenceThreshold = 0.3;
+
+/// Minimum component area as percentage of image (0.0 to 1.0)
+const double kMinComponentAreaPercentage = 0.01;
+
+/// Classification confidence threshold (0.0 to 1.0)
+const double kClassificationConfidenceThreshold = 0.05;
+
+/// Maximum number of food items to detect per image
+const int kMaxFoodItems = 5;
+
+/// Maximum number of predictions to return per classification
+const int kMaxPredictionsPerModel = 10;
+
+/// Maximum number of food suggestions to show in edit dialog
+const int kMaxFoodSuggestions = 12;
+
+/// Minimum confidence threshold for food suggestions (lower = more variety)
+const double kMinSuggestionConfidence = 0.15;
+
+/// Model loading retry attempts
+const int kModelLoadRetryAttempts = 3;
+
+/// Model loading retry delay in milliseconds
+const int kModelLoadRetryDelayMs = 1000;
+
+/// Animation progress clamp maximum (allows overflow visualization)
+const double kMaxAnimationProgress = 1.5;
+
+/// Minimum portion size in grams
+const int kMinPortionGrams = 50;
+
+/// Maximum portion size in grams
+const int kMaxPortionGrams = 1000;
+
+/// Default plate size estimate in cm (when detection fails)
+const double kDefaultPlateSizeCm = 20.0;
+
+/// Plate detection aspect ratio range (square-ish images)
+const double kPlateAspectRatioMin = 0.8;
+const double kPlateAspectRatioMax = 1.2;
+
+/// Typical plate area percentage of image
+const double kTypicalPlateAreaPercentage = 0.6;
+
+/// Estimated real-world area for portion estimation (cm²)
+const double kEstimatedRealAreaCm2 = 625.0; // 25cm x 25cm
 
 // ============================================================================
 // BATCH 1: Core Data Models with Improvements
@@ -152,14 +204,14 @@ class FoodPrediction {
 
 /// Helper class for connected component analysis
 class ConnectedComponent {
-  List<Point<int>> pixels = [];
+  List<math.Point<int>> pixels = [];
   int minX = 999999;
   int maxX = 0;
   int minY = 999999;
   int maxY = 0;
 
   void addPixel(int x, int y) {
-    pixels.add(Point(x, y));
+    pixels.add(math.Point(x, y));
     minX = math.min(minX, x);
     maxX = math.max(maxX, x);
     minY = math.min(minY, y);
@@ -244,26 +296,89 @@ class NutritionData {
 }
 
 /// Nutrition API Service - Uses Open Food Facts (free, no API key required)
+/// IMPROVED: Now includes persistent Firestore cache
 class NutritionService {
   static final NutritionService _instance = NutritionService._internal();
   factory NutritionService() => _instance;
   NutritionService._internal();
 
-  // Cache to avoid repeated API calls
+  // In-memory cache to avoid repeated API calls
   final Map<String, NutritionData> _cache = {};
 
-  /// Check if nutrition data is cached
-  NutritionData? getCachedNutrition(String foodName) {
-    return _cache[foodName.toLowerCase().trim()];
+  // Firestore instance for persistent cache
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  /// Check if nutrition data is cached (in-memory or Firestore)
+  Future<NutritionData?> getCachedNutrition(String foodName) async {
+    final cacheKey = foodName.toLowerCase().trim();
+
+    // Check in-memory cache first
+    if (_cache.containsKey(cacheKey)) {
+      return _cache[cacheKey];
+    }
+
+    // Check Firestore persistent cache
+    try {
+      final doc = await _firestore
+          .collection('nutrition_cache')
+          .doc(cacheKey)
+          .get();
+
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final nutrition = NutritionData(
+          caloriesPer100g: data['caloriesPer100g'] ?? 150,
+          macrosPer100g: {
+            'carbs': data['carbs'] ?? 30,
+            'protein': data['protein'] ?? 10,
+            'fat': data['fat'] ?? 5,
+          },
+          source: data['source'] ?? 'Cached',
+        );
+
+        // Add to in-memory cache
+        _cache[cacheKey] = nutrition;
+        return nutrition;
+      }
+    } catch (e) {
+      print('Error reading from Firestore cache: $e');
+    }
+
+    return null;
+  }
+
+  /// Save nutrition data to persistent cache (Firestore)
+  Future<void> _saveToPersistentCache(
+    String foodName,
+    NutritionData nutrition,
+  ) async {
+    final cacheKey = foodName.toLowerCase().trim();
+
+    try {
+      await _firestore.collection('nutrition_cache').doc(cacheKey).set({
+        'foodName': foodName,
+        'caloriesPer100g': nutrition.caloriesPer100g,
+        'carbs': nutrition.macrosPer100g['carbs'],
+        'protein': nutrition.macrosPer100g['protein'],
+        'fat': nutrition.macrosPer100g['fat'],
+        'source': nutrition.source,
+        'cachedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('Error saving to Firestore cache: $e');
+      // Non-critical, continue without persistent cache
+    }
   }
 
   /// Fetch nutrition data from Open Food Facts API (free, no API key)
+  /// IMPROVED: Now checks persistent cache and saves results
   Future<NutritionData> fetchNutrition(String foodName) async {
-    // Check cache first
+    // Check cache first (in-memory and persistent)
     final cacheKey = foodName.toLowerCase().trim();
-    if (_cache.containsKey(cacheKey)) {
+    final cached = await getCachedNutrition(foodName);
+    if (cached != null) {
       print('Using cached nutrition data for: $foodName');
-      return _cache[cacheKey]!;
+      return cached;
     }
 
     try {
@@ -306,8 +421,9 @@ class NutritionService {
             source: 'Open Food Facts',
           );
 
-          // Cache the result
+          // Cache the result (in-memory and persistent)
           _cache[cacheKey] = nutrition;
+          await _saveToPersistentCache(foodName, nutrition);
 
           print(
             '✓ Found nutrition data: ${nutrition.caloriesPer100g} kcal/100g',
@@ -385,6 +501,7 @@ class NutritionService {
             );
 
             _cache[cacheKey] = nutrition;
+            await _saveToPersistentCache(foodName, nutrition);
             print('✓ Found nutrition data from USDA: $calories kcal/100g');
             return nutrition;
           }
@@ -397,6 +514,7 @@ class NutritionService {
     // Return default if all searches fail
     final defaultData = NutritionData.defaultValues();
     _cache[cacheKey] = defaultData;
+    // Don't save defaults to persistent cache (they're not real data)
     return defaultData;
   }
 
@@ -452,7 +570,6 @@ class FoodRecognitionPage extends StatefulWidget {
 
 class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     with TickerProviderStateMixin {
-
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // Models
@@ -570,84 +687,189 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
 
   Future<void> _loadModelsAndProcess() async {
     try {
+      if (!mounted) return;
       setState(() {
         _currentStage = 0;
         _processingProgress = 0.1;
       });
       await _loadModels();
+      if (!mounted) return;
       setState(() {
         _currentStage = 1;
         _processingProgress = 0.3;
       });
       await _processImage();
+      if (!mounted) return;
       setState(() {
         _currentStage = 2;
         _processingProgress = 0.7;
       });
       await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
       setState(() {
         _currentStage = 3;
         _processingProgress = 1.0;
         _isProcessing = false;
       });
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to process image: ${e.toString()}';
-        _isProcessing = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to process image: ${e.toString()}';
+          _isProcessing = false;
+        });
+      }
     }
   }
 
   Future<void> _loadModels() async {
-    try {
-      print('Loading models...');
+    print('Loading models...');
 
-      _segmentationModel = await Interpreter.fromAsset(
-        'assets/uec_unet_int8.tflite',
-      );
-      print('✓ Segmentation model loaded');
-      print('  Input shape: ${_segmentationModel!.getInputTensor(0).shape}');
-      print('  Output shape: ${_segmentationModel!.getOutputTensor(0).shape}');
+    // Load segmentation model with retry
+    _segmentationModel = await _loadModelWithRetry(
+      'assets/uec_unet_int8.tflite',
+      'Segmentation',
+    );
 
-      _kenyanFoodModel = await Interpreter.fromAsset(
-        'assets/kenyanfood.tflite',
-      );
-      print('✓ Kenyan food model loaded');
-      print('  Input shape: ${_kenyanFoodModel!.getInputTensor(0).shape}');
-      print('  Output shape: ${_kenyanFoodModel!.getOutputTensor(0).shape}');
+    // Load Kenyan food model with retry
+    _kenyanFoodModel = await _loadModelWithRetry(
+      'assets/kenyanfood.tflite',
+      'Kenyan Food',
+    );
 
-      _food101Model = await Interpreter.fromAsset('assets/food101.tflite');
-      print('✓ Food101 model loaded');
-      print('  Input shape: ${_food101Model!.getInputTensor(0).shape}');
-      print('  Output shape: ${_food101Model!.getOutputTensor(0).shape}');
+    // Load Food101 model with retry
+    _food101Model = await _loadModelWithRetry(
+      'assets/food101.tflite',
+      'Food101',
+    );
 
-      print('All models loaded successfully');
-    } catch (e) {
-      print('Model loading error: $e');
-      throw Exception('Model loading failed: $e');
+    print('All models loaded successfully');
+  }
+
+  /// Load a model with retry mechanism
+  Future<Interpreter> _loadModelWithRetry(
+    String assetPath,
+    String modelName,
+  ) async {
+    Exception? lastException;
+
+    for (int attempt = 1; attempt <= kModelLoadRetryAttempts; attempt++) {
+      try {
+        print(
+          'Loading $modelName model (attempt $attempt/$kModelLoadRetryAttempts)...',
+        );
+        final model = await Interpreter.fromAsset(assetPath);
+        print('✓ $modelName model loaded');
+        print('  Input shape: ${model.getInputTensor(0).shape}');
+        print('  Output shape: ${model.getOutputTensor(0).shape}');
+        return model;
+      } catch (e) {
+        lastException = e is Exception ? e : Exception(e.toString());
+        print('✗ $modelName model loading failed (attempt $attempt): $e');
+
+        if (attempt < kModelLoadRetryAttempts) {
+          await Future.delayed(
+            Duration(milliseconds: kModelLoadRetryDelayMs * attempt),
+          );
+        }
+      }
     }
+
+    throw Exception(
+      '$modelName model loading failed after $kModelLoadRetryAttempts attempts: $lastException',
+    );
   }
 
   Future<void> _processImage() async {
     try {
       print('Processing image...');
 
-      final imageBytes = await _imageFile!.readAsBytes();
-      _originalImage = img.decodeImage(imageBytes);
-
-      if (_originalImage == null) {
-        throw Exception('Failed to decode image');
+      if (_imageFile == null || !await _imageFile!.exists()) {
+        throw Exception('Image file does not exist');
       }
+
+      // Read image bytes with error handling
+      Uint8List imageBytes;
+      try {
+        imageBytes = await _imageFile!.readAsBytes();
+      } catch (e) {
+        throw Exception('Failed to read image file: $e');
+      }
+
+      if (imageBytes.isEmpty) {
+        throw Exception('Image file is empty');
+      }
+
+      // Try to decode image with multiple attempts
+      img.Image? decodedImage;
+      try {
+        decodedImage = img.decodeImage(imageBytes);
+      } catch (e) {
+        print(
+          'Warning: Standard decode failed, trying alternative methods: $e',
+        );
+        // Try alternative decoding methods if available
+        try {
+          // Try decoding as PNG if JPEG fails
+          decodedImage = img.decodePng(imageBytes);
+        } catch (e2) {
+          try {
+            // Try decoding as JPEG if PNG fails
+            decodedImage = img.decodeJpg(imageBytes);
+          } catch (e3) {
+            throw Exception(
+              'Failed to decode image in any format: $e, $e2, $e3',
+            );
+          }
+        }
+      }
+
+      if (decodedImage == null) {
+        throw Exception('Failed to decode image: decoder returned null');
+      }
+
+      // Validate decoded image dimensions
+      if (decodedImage.width <= 0 || decodedImage.height <= 0) {
+        throw Exception(
+          'Invalid image dimensions: ${decodedImage.width}x${decodedImage.height}',
+        );
+      }
+
+      _originalImage = decodedImage;
 
       print(
         'Image decoded: ${_originalImage!.width}x${_originalImage!.height}',
       );
 
-      _processedImage = img.copyResize(
-        _originalImage!,
-        width: math.min(_originalImage!.width, 512),
-        height: math.min(_originalImage!.height, 512),
-      );
+      // Resize with validation
+      try {
+        final targetWidth = math.min(_originalImage!.width, 512);
+        final targetHeight = math.min(_originalImage!.height, 512);
+
+        if (targetWidth <= 0 || targetHeight <= 0) {
+          throw Exception(
+            'Invalid target dimensions for resize: ${targetWidth}x${targetHeight}',
+          );
+        }
+
+        _processedImage = img.copyResize(
+          _originalImage!,
+          width: targetWidth,
+          height: targetHeight,
+        );
+
+        if (_processedImage == null) {
+          throw Exception('Image resize returned null');
+        }
+
+        // Validate resized image
+        if (_processedImage!.width <= 0 || _processedImage!.height <= 0) {
+          throw Exception(
+            'Invalid resized image dimensions: ${_processedImage!.width}x${_processedImage!.height}',
+          );
+        }
+      } catch (e) {
+        throw Exception('Failed to resize image: $e');
+      }
 
       print('Running segmentation...');
       await _runSegmentation();
@@ -658,13 +880,24 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       print('Image processing completed');
     } catch (e) {
       print('Image processing error: $e');
-      throw Exception('Image processing failed: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to process image: ${e.toString()}';
+          _isProcessing = false;
+        });
+      }
+      rethrow;
     }
   }
 
   // ============================================================================
   // BATCH 2: Improved Segmentation with Connected Components & Real Bounding Boxes
   // ============================================================================
+
+  // Store segmentation output for extracting top predictions
+  dynamic _segmentationOutput;
+  List<int> _segmentationOutputShape = [];
+  TensorType _segmentationOutputType = TensorType.float32;
 
   Future<void> _runSegmentation() async {
     if (_segmentationModel == null || _processedImage == null) {
@@ -722,12 +955,26 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       _segmentationModel!.run(input, output);
       print('Segmentation inference completed');
 
+      // Store output for later prediction extraction
+      _segmentationOutput = output;
+      _segmentationOutputShape = outputShape;
+      _segmentationOutputType = outputType;
+
       _processSegmentationOutput(output, outputShape, outputType);
     } catch (e) {
       print('Segmentation error: $e');
       print('Stack trace: ${StackTrace.current}');
       print('Creating fallback segments...');
-      _createFallbackSegment();
+      try {
+        _createFallbackSegment();
+      } catch (fallbackError) {
+        print('Error creating fallback segment: $fallbackError');
+        // Set error state if even fallback fails
+        setState(() {
+          _errorMessage = 'Failed to process image: ${e.toString()}';
+          _isProcessing = false;
+        });
+      }
     }
   }
 
@@ -799,8 +1046,8 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
             }
 
             final pixelIdx = y * width + x;
-            if (maxProb > 0.3 && maxClass > 0) {
-              // Threshold: 30% confidence, not background
+            if (maxProb > kSegmentationConfidenceThreshold && maxClass > 0) {
+              // Threshold: configurable confidence, not background
               classMap[pixelIdx] = maxClass;
               confidenceMap[pixelIdx] = maxProb;
             }
@@ -821,7 +1068,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
             }
 
             final pixelIdx = y * width + x;
-            if (maxProb > 0.3 && maxClass > 0) {
+            if (maxProb > kSegmentationConfidenceThreshold && maxClass > 0) {
               classMap[pixelIdx] = maxClass;
               confidenceMap[pixelIdx] = maxProb;
             }
@@ -849,8 +1096,9 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
               classId,
             );
 
-            if (component.area > (width * height * 0.01)) {
-              // Min 1% of image
+            if (component.area >
+                (width * height * kMinComponentAreaPercentage)) {
+              // Min configurable percentage of image
               components.putIfAbsent(classId, () => []).add(component);
             }
           }
@@ -910,9 +1158,9 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           }
 
           foodId++;
-          if (foodId >= 5) break; // Limit to 5 food items
+          if (foodId >= kMaxFoodItems) break; // Limit to max food items
         }
-        if (foodId >= 5) return;
+        if (foodId >= kMaxFoodItems) return;
       });
 
       if (_segmentedFoods.isEmpty) {
@@ -928,7 +1176,16 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     } catch (e) {
       print('Error processing segmentation output: $e');
       print('Stack trace: ${StackTrace.current}');
-      _createFallbackSegment();
+      try {
+        _createFallbackSegment();
+      } catch (fallbackError) {
+        print('Error creating fallback segment: $fallbackError');
+        // Set error state if even fallback fails
+        setState(() {
+          _errorMessage = 'Failed to segment image: ${e.toString()}';
+          _isProcessing = false;
+        });
+      }
     }
   }
 
@@ -943,8 +1200,8 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     int targetClass,
   ) {
     final component = ConnectedComponent();
-    final queue = <Point<int>>[];
-    queue.add(Point(startX, startY));
+    final queue = <math.Point<int>>[];
+    queue.add(math.Point(startX, startY));
 
     while (queue.isNotEmpty) {
       final point = queue.removeAt(0);
@@ -961,10 +1218,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       component.addPixel(x, y);
 
       // Check 4-connected neighbors
-      queue.add(Point(x + 1, y));
-      queue.add(Point(x - 1, y));
-      queue.add(Point(x, y + 1));
-      queue.add(Point(x, y - 1));
+      queue.add(math.Point(x + 1, y));
+      queue.add(math.Point(x - 1, y));
+      queue.add(math.Point(x, y + 1));
+      queue.add(math.Point(x, y - 1));
     }
 
     return component;
@@ -1011,6 +1268,104 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   // BATCH 3: Classification & FIXED Prediction Priority Logic
   // ============================================================================
 
+  /// Extract top UEC UNET predictions for a specific region
+  /// This ensures all 3 models (UEC UNET, Kenyan Food, Food101) contribute predictions
+  List<FoodPrediction> _extractUecUnetPredictionsForRegion(SegmentedFood food) {
+    if (_segmentationOutput == null ||
+        _segmentationOutputShape.isEmpty ||
+        food.mask.isEmpty) {
+      return [];
+    }
+
+    try {
+      final height = _segmentationOutputShape[1];
+      final width = _segmentationOutputShape[2];
+      final numClasses = _segmentationOutputShape[3];
+
+      // Aggregate class probabilities within the region's bounding box
+      final classScores =
+          <int, List<double>>{}; // classId -> list of probabilities
+
+      // Scale bounding box from segmentation coordinates to output coordinates
+      final scaleX = width / food.maskWidth;
+      final scaleY = height / food.maskHeight;
+
+      final scaledBox = Rect.fromLTRB(
+        (food.boundingBox.left * scaleX).clamp(0, width.toDouble()),
+        (food.boundingBox.top * scaleY).clamp(0, height.toDouble()),
+        (food.boundingBox.right * scaleX).clamp(0, width.toDouble()),
+        (food.boundingBox.bottom * scaleY).clamp(0, height.toDouble()),
+      );
+
+      // Sample pixels within the bounding box
+      final startX = scaledBox.left.toInt();
+      final endX = scaledBox.right.toInt();
+      final startY = scaledBox.top.toInt();
+      final endY = scaledBox.bottom.toInt();
+
+      if (_segmentationOutputType == TensorType.uint8) {
+        final flatOutput = _segmentationOutput as Uint8List;
+        for (int y = startY; y < endY && y < height; y++) {
+          for (int x = startX; x < endX && x < width; x++) {
+            final baseIdx = (y * width + x) * numClasses;
+            for (int c = 1; c < numClasses && c < uecUnetLabels.length; c++) {
+              // Skip background (class 0)
+              final prob = flatOutput[baseIdx + c] / 255.0;
+              if (prob > kClassificationConfidenceThreshold) {
+                classScores.putIfAbsent(c, () => []).add(prob);
+              }
+            }
+          }
+        }
+      } else {
+        // Float32 output
+        for (int y = startY; y < endY && y < height; y++) {
+          for (int x = startX; x < endX && x < width; x++) {
+            for (int c = 1; c < numClasses && c < uecUnetLabels.length; c++) {
+              // Skip background (class 0)
+              final prob = _segmentationOutput[0][y][x][c];
+              if (prob > kClassificationConfidenceThreshold) {
+                classScores.putIfAbsent(c, () => []).add(prob);
+              }
+            }
+          }
+        }
+      }
+
+      // Calculate average confidence for each class
+      final predictions = <FoodPrediction>[];
+      classScores.forEach((classId, scores) {
+        if (scores.isEmpty) return;
+        final avgConfidence = scores.reduce((a, b) => a + b) / scores.length;
+        final foodName = classId < uecUnetLabels.length
+            ? uecUnetLabels[classId]
+            : 'Unknown';
+
+        // Note: Nutrition will be fetched later, use placeholder for now
+        predictions.add(
+          FoodPrediction(
+            foodName: foodName,
+            confidence: avgConfidence,
+            caloriesPer100g: 150, // Will be updated by nutrition fetch
+            macrosPer100g: {
+              'carbs': 30,
+              'protein': 10,
+              'fat': 5,
+            }, // Will be updated
+            source: 'UEC UNET',
+          ),
+        );
+      });
+
+      // Sort by confidence and return top predictions
+      predictions.sort((a, b) => b.confidence.compareTo(a.confidence));
+      return predictions.take(kMaxPredictionsPerModel).toList();
+    } catch (e) {
+      print('Error extracting UEC UNET predictions: $e');
+      return [];
+    }
+  }
+
   Future<void> _runClassification() async {
     if (_processedImage == null) {
       print('No image for classification');
@@ -1037,26 +1392,32 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
             '  Cropped image size: ${croppedImage.width}x${croppedImage.height}',
           );
 
-          // Run both classification models on the cropped region
-          final kenyanPredictions = await _runKenyanFoodClassification(
-            croppedImage,
-          );
-          final food101Predictions = await _runFood101Classification(
-            croppedImage,
-          );
+          // IMPROVED: Run classification models in parallel for better performance
+          final results = await Future.wait([
+            _runKenyanFoodClassification(croppedImage),
+            _runFood101Classification(croppedImage),
+          ]);
 
-          // Store per-region predictions (will be used in assignment)
+          final kenyanPredictions = results[0];
+          final food101Predictions = results[1];
+
+          // NEW: Extract top UEC UNET predictions for this region (all 3 models now considered!)
+          final uecUnetPredictions = _extractUecUnetPredictionsForRegion(food);
+
+          // Store per-region predictions from ALL THREE models
           food.perRegionPredictions = [
-            ...kenyanPredictions,
-            ...food101Predictions,
+            ...uecUnetPredictions, // UEC UNET predictions
+            ...kenyanPredictions, // Kenyan Food predictions
+            ...food101Predictions, // Food101 predictions
           ];
 
-          // Also add to global predictions list for fallback
+          // Also add to global predictions list for fallback (ALL THREE MODELS)
+          allPredictions.addAll(uecUnetPredictions);
           allPredictions.addAll(kenyanPredictions);
           allPredictions.addAll(food101Predictions);
 
           print(
-            '  Found ${kenyanPredictions.length + food101Predictions.length} predictions for this region',
+            '  Found ${uecUnetPredictions.length + kenyanPredictions.length + food101Predictions.length} predictions (UEC: ${uecUnetPredictions.length}, Kenyan: ${kenyanPredictions.length}, Food101: ${food101Predictions.length})',
           );
         } else {
           print('  Warning: Could not crop image for region ${i + 1}');
@@ -1102,7 +1463,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       }
 
       // FIXED: Assign predictions with proper priority (now uses per-region predictions)
-      _assignPredictionsToSegments();
+      await _assignPredictionsToSegments();
 
       // Estimate portion sizes AFTER food names are assigned (needed for density calculation)
       _estimatePortionSizes();
@@ -1118,14 +1479,15 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
   }
 
-  /// IMPROVED: Now uses per-region predictions for better accuracy
-  void _assignPredictionsToSegments() {
+  /// IMPROVED: Ensemble voting with weighted averaging for better accuracy
+  /// Uses voting from all models and normalizes confidence scores
+  Future<void> _assignPredictionsToSegments() async {
     if (_segmentedFoods.isEmpty) {
       print('No segments to assign predictions to');
       return;
     }
 
-    print('\n=== PREDICTION ASSIGNMENT (PER-REGION CLASSIFICATION) ===');
+    print('\n=== PREDICTION ASSIGNMENT (ENSEMBLE VOTING) ===');
 
     for (int i = 0; i < _segmentedFoods.length; i++) {
       final segment = _segmentedFoods[i];
@@ -1133,47 +1495,66 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       // Build list of all possible predictions for this segment
       List<FoodPrediction> candidatePredictions = [];
 
-      // 1. Add segmentation prediction with its confidence
+      // 1. Add segmentation prediction with normalized confidence
       if (segment.foodName != null && segment.foodName!.isNotEmpty) {
+        // Get nutrition data (async)
+        final calories = await _getCaloriesForFood(segment.foodName!);
+        final macros = await _getMacrosForFood(segment.foodName!);
+
         candidatePredictions.add(
           FoodPrediction(
             foodName: segment.foodName!,
-            confidence: segment.confidence,
-            caloriesPer100g: _getCaloriesForFood(segment.foodName!),
-            macrosPer100g: _getMacrosForFood(segment.foodName!),
+            confidence: _normalizeConfidence(segment.confidence, 'UEC UNET'),
+            caloriesPer100g: calories,
+            macrosPer100g: macros,
             source: segment.segmentationSource ?? 'UEC UNET',
           ),
         );
       }
 
-      // 2. NEW: Prioritize per-region predictions (more accurate for this specific region)
+      // 2. Add per-region predictions with normalized confidence
       if (segment.perRegionPredictions.isNotEmpty) {
-        candidatePredictions.addAll(segment.perRegionPredictions);
+        for (var pred in segment.perRegionPredictions) {
+          candidatePredictions.add(
+            FoodPrediction(
+              foodName: pred.foodName,
+              confidence: _normalizeConfidence(pred.confidence, pred.source),
+              caloriesPer100g: pred.caloriesPer100g,
+              macrosPer100g: pred.macrosPer100g,
+              source: pred.source,
+            ),
+          );
+        }
         print(
           'Segment ${i + 1}: Using ${segment.perRegionPredictions.length} per-region predictions',
         );
       }
 
-    
+      // 3. IMPROVED: Ensemble voting - aggregate predictions with same food name
+      final aggregatedPredictions = _aggregatePredictionsByFoodName(
+        candidatePredictions,
+      );
 
-      // 4. Sort by confidence (highest first)
-      candidatePredictions.sort((a, b) => b.confidence.compareTo(a.confidence));
+      // 4. Sort by aggregated confidence (highest first)
+      aggregatedPredictions.sort(
+        (a, b) => b.confidence.compareTo(a.confidence),
+      );
 
-      // 5. Pick the highest confidence prediction
-      if (candidatePredictions.isNotEmpty) {
-        final bestPrediction = candidatePredictions[0];
+      // 5. Pick the best prediction (highest aggregated confidence)
+      if (aggregatedPredictions.isNotEmpty) {
+        final bestPrediction = aggregatedPredictions[0];
 
         print('Segment ${i + 1}:');
         print(
           '  Segmentation: ${segment.foodName ?? "None"} (${(segment.confidence * 100).toStringAsFixed(1)}%)',
         );
-        if (segment.perRegionPredictions.isNotEmpty) {
+        if (aggregatedPredictions.length > 1) {
           print(
-            '  Best per-region: ${segment.perRegionPredictions[0].foodName} (${(segment.perRegionPredictions[0].confidence * 100).toStringAsFixed(1)}%)',
+            '  Top 3 candidates: ${aggregatedPredictions.take(3).map((p) => '${p.foodName} (${(p.confidence * 100).toStringAsFixed(1)}%)').join(', ')}',
           );
         }
         print(
-          '  ✓ CHOSEN: ${bestPrediction.foodName} (${(bestPrediction.confidence * 100).toStringAsFixed(1)}%) - ${bestPrediction.source}',
+          '  ✓ CHOSEN: ${bestPrediction.foodName} (${(bestPrediction.confidence * 100).toStringAsFixed(1)}% aggregated) - ${bestPrediction.source}',
         );
 
         // Apply the best prediction
@@ -1181,11 +1562,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         segment.caloriesPer100g = bestPrediction.caloriesPer100g;
         segment.macrosPer100g = bestPrediction.macrosPer100g;
         segment.classificationSource = bestPrediction.source;
-
-        // Update confidence if classification was chosen
-        if (bestPrediction.source != segment.segmentationSource) {
-          segment.confidence = bestPrediction.confidence;
-        }
+        segment.confidence = bestPrediction.confidence;
       } else {
         // Fallback if no predictions at all
         print('Segment ${i + 1}: No predictions available, using defaults');
@@ -1198,6 +1575,89 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     print('=== ASSIGNMENT COMPLETE ===\n');
   }
 
+  /// Normalize confidence scores across different models
+  /// Different models have different confidence distributions
+  double _normalizeConfidence(double rawConfidence, String source) {
+    // Model-specific calibration factors (based on typical performance)
+    final calibrationFactors = {
+      'UEC UNET': 0.9, // Segmentation tends to be slightly overconfident
+      'Kenyan Food Model': 1.0, // Well-calibrated
+      'Food101 Model': 0.95, // Slightly overconfident
+    };
+
+    final factor = calibrationFactors[source] ?? 1.0;
+    return (rawConfidence * factor).clamp(0.0, 1.0);
+  }
+
+  /// Aggregate predictions with same food name using weighted voting
+  /// Combines multiple model predictions for the same food
+  List<FoodPrediction> _aggregatePredictionsByFoodName(
+    List<FoodPrediction> predictions,
+  ) {
+    final Map<String, List<FoodPrediction>> grouped = {};
+
+    // Group predictions by normalized food name
+    for (final pred in predictions) {
+      final normalizedName = _normalizeFoodName(pred.foodName);
+      grouped.putIfAbsent(normalizedName, () => []).add(pred);
+    }
+
+    final aggregated = <FoodPrediction>[];
+
+    grouped.forEach((normalizedName, preds) {
+      if (preds.isEmpty) return;
+
+      // Weighted average confidence (more models = higher confidence)
+      double totalConfidence = 0.0;
+      int modelCount = 0;
+      final modelWeights = {
+        'UEC UNET': 1.2, // Segmentation gets higher weight
+        'Kenyan Food Model': 1.0,
+        'Food101 Model': 1.0,
+      };
+
+      for (final pred in preds) {
+        final weight = modelWeights[pred.source] ?? 1.0;
+        totalConfidence += pred.confidence * weight;
+        modelCount++;
+      }
+
+      // Ensemble confidence: average + bonus for multiple models agreeing
+      final avgConfidence = totalConfidence / preds.length;
+      final agreementBonus = (modelCount > 1) ? 0.1 * (modelCount - 1) : 0.0;
+      final finalConfidence = (avgConfidence + agreementBonus).clamp(0.0, 1.0);
+
+      // Use nutrition from highest confidence prediction
+      preds.sort((a, b) => b.confidence.compareTo(a.confidence));
+      final bestPred = preds[0];
+
+      aggregated.add(
+        FoodPrediction(
+          foodName: bestPred.foodName, // Use original name, not normalized
+          confidence: finalConfidence,
+          caloriesPer100g: bestPred.caloriesPer100g,
+          macrosPer100g: bestPred.macrosPer100g,
+          source: 'Ensemble (${preds.length} models)',
+        ),
+      );
+    });
+
+    return aggregated;
+  }
+
+  /// Normalize food name for matching (handles variations)
+  String _normalizeFoodName(String foodName) {
+    return foodName
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\w\s]'), '') // Remove special chars
+        .replaceAll(RegExp(r'\s+'), ' ') // Normalize spaces
+        .replaceAll(
+          RegExp(r'\b(grilled|fried|baked|roasted|steamed)\s+'),
+          '',
+        ) // Remove cooking methods
+        .trim();
+  }
+
   void _assignDummyPredictions() {
     for (var segment in _segmentedFoods) {
       if (segment.foodName == null || segment.foodName!.isEmpty) {
@@ -1206,16 +1666,6 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       segment.caloriesPer100g = 150;
       segment.macrosPer100g = {'carbs': 30, 'protein': 10, 'fat': 5};
     }
-  }
-
-  FoodPrediction _createDummyPrediction() {
-    return FoodPrediction(
-      foodName: 'Unknown',
-      confidence: 0.5,
-      caloriesPer100g: 150,
-      macrosPer100g: {'carbs': 30, 'protein': 10, 'fat': 5},
-      source: 'Fallback',
-    );
   }
 
   Future<List<FoodPrediction>> _runKenyanFoodClassification(
@@ -1374,14 +1824,19 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     List<FoodPrediction> predictions = [];
 
     for (int i = 0; i < output.length && i < labels.length; i++) {
-      if (output[i] > 0.05) {
-        // 5% confidence threshold
+      if (output[i] > kClassificationConfidenceThreshold) {
+        // Configurable confidence threshold
+        // Note: Nutrition will be fetched later, use placeholder for now
         predictions.add(
           FoodPrediction(
             foodName: labels[i],
             confidence: output[i],
-            caloriesPer100g: _getCaloriesForFood(labels[i]),
-            macrosPer100g: _getMacrosForFood(labels[i]),
+            caloriesPer100g: 150, // Will be updated by nutrition fetch
+            macrosPer100g: {
+              'carbs': 30,
+              'protein': 10,
+              'fat': 5,
+            }, // Will be updated
             source: source,
           ),
         );
@@ -1389,7 +1844,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
 
     predictions.sort((a, b) => b.confidence.compareTo(a.confidence));
-    return predictions.take(10).toList();
+    return predictions.take(kMaxPredictionsPerModel).toList();
   }
 
   // Continue to batch 4...
@@ -1419,7 +1874,14 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   ];
 
   // Static calorie and macro data for Kenyan foods only (per 100g serving)
-  int _getCaloriesForFood(String foodName) {
+  // NOTE: This is a fallback database. For non-Kenyan foods, the API will be used.
+  // If API fails, this fallback provides reasonable defaults.
+  Future<int> _getCaloriesForFood(String foodName) async {
+    if (foodName.isEmpty) {
+      print('Warning: Empty food name provided to _getCaloriesForFood');
+      return 150; // Default fallback
+    }
+
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final calorieDb = {
@@ -1441,7 +1903,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
 
     // For non-Kenyan foods, check API cache first, then use static fallback
-    final cached = _nutritionService.getCachedNutrition(foodName);
+    final cached = await _nutritionService.getCachedNutrition(foodName);
     if (cached != null) {
       return cached.caloriesPer100g;
     }
@@ -1487,10 +1949,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       'Nachos': 346,
     };
 
-    return fallbackDb[foodName] ?? 150;
+    final calories = fallbackDb[foodName] ?? 150;
+
+    // Log when using fallback (helps identify foods that need API data)
+    if (!_kenyanFoods.contains(foodName) && !fallbackDb.containsKey(foodName)) {
+      print('Info: Using default calories (150) for unknown food: $foodName');
+    }
+
+    return calories;
   }
 
-  Map<String, int> _getMacrosForFood(String foodName) {
+  Future<Map<String, int>> _getMacrosForFood(String foodName) async {
+    if (foodName.isEmpty) {
+      print('Warning: Empty food name provided to _getMacrosForFood');
+      return {'carbs': 30, 'protein': 10, 'fat': 5}; // Default fallback
+    }
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final macroDb = {
@@ -1507,7 +1980,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
 
     // For non-Kenyan foods, check API cache first, then use static fallback
-    final cached = _nutritionService.getCachedNutrition(foodName);
+    final cached = await _nutritionService.getCachedNutrition(foodName);
     if (cached != null) {
       return cached.macrosPer100g;
     }
@@ -1530,7 +2003,15 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       'Spaghetti Bolognese': {'carbs': 28, 'protein': 12, 'fat': 5},
     };
 
-    return fallbackDb[foodName] ?? {'carbs': 30, 'protein': 10, 'fat': 5};
+    final macros =
+        fallbackDb[foodName] ?? {'carbs': 30, 'protein': 10, 'fat': 5};
+
+    // Log when using fallback (helps identify foods that need API data)
+    if (!_kenyanFoods.contains(foodName) && !fallbackDb.containsKey(foodName)) {
+      print('Info: Using default macros for unknown food: $foodName');
+    }
+
+    return macros;
   }
 
   /// Fetch nutrition data from API for all predictions (async)
@@ -1568,93 +2049,98 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   Future<void> _fetchUserGoalsAndTodayIntake() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-  try {
-    // Fetch user goals
-    final userDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .get();
+    try {
+      // Fetch user goals
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
 
-    if (userDoc.exists && userDoc.data() != null) {
-      final data = userDoc.data()!;
-      setState(() {
-        dailyGoal = _parseFirestoreNumber(data['calories']);
-        carbsTarget = _parseFirestoreNumber(data['carbG']);
-        proteinTarget = _parseFirestoreNumber(data['proteinG']);
-        fatTarget = _parseFirestoreNumber(data['fatG']);
-        _userGoalsLoaded = true;
-      });
+      if (userDoc.exists && userDoc.data() != null) {
+        final data = userDoc.data()!;
+        if (mounted) {
+          setState(() {
+            dailyGoal = _parseFirestoreNumber(data['calories']);
+            carbsTarget = _parseFirestoreNumber(data['carbG']);
+            proteinTarget = _parseFirestoreNumber(data['proteinG']);
+            fatTarget = _parseFirestoreNumber(data['fatG']);
+            _userGoalsLoaded = true;
+          });
 
-      print(
-        'User goals loaded: $dailyGoal cal, $carbsTarget carbs, $proteinTarget protein, $fatTarget fat',
-      );
+          print(
+            'User goals loaded: $dailyGoal cal, $carbsTarget carbs, $proteinTarget protein, $fatTarget fat',
+          );
+        }
+      }
+
+      // Fetch today's already consumed food from BOTH collections
+      final today = DateTime.now();
+      final dateStr =
+          "${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
+
+      int totalCals = 0;
+      int totalCarbs = 0;
+      int totalProtein = 0;
+      int totalFat = 0;
+
+      // 1. Fetch from NEW 'meals' collection
+      final mealsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('meals')
+          .where('date', isEqualTo: dateStr)
+          .get();
+
+      for (var mealDoc in mealsSnapshot.docs) {
+        final mealData = mealDoc.data();
+
+        // Use aggregated totals from meal document
+        totalCals += _parseFirestoreNumber(mealData['totalCalories']);
+        totalCarbs += _parseFirestoreNumber(mealData['totalCarbs']);
+        totalProtein += _parseFirestoreNumber(mealData['totalProtein']);
+        totalFat += _parseFirestoreNumber(mealData['totalFat']);
+      }
+
+      // 2. Also fetch from OLD 'barcodes' collection for backward compatibility
+      final barcodesSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('barcodes')
+          .where('date', isEqualTo: dateStr)
+          .get();
+
+      for (var doc in barcodesSnapshot.docs) {
+        final mealData = doc.data();
+        totalCals += _parseFirestoreNumber(mealData['calories']);
+        totalCarbs += _parseFirestoreNumber(mealData['carbs']);
+        totalProtein += _parseFirestoreNumber(mealData['protein']);
+        totalFat += _parseFirestoreNumber(mealData['fat']);
+      }
+
+      if (mounted) {
+        setState(() {
+          todayCaloriesConsumed = totalCals;
+          todayCarbsConsumed = totalCarbs;
+          todayProteinConsumed = totalProtein;
+          todayFatConsumed = totalFat;
+        });
+
+        print(
+          'Today consumed so far (from meals + barcodes): $totalCals cal, $totalCarbs carbs, $totalProtein protein, $totalFat fat',
+        );
+      }
+    } catch (e) {
+      print('Error fetching user goals and today intake: $e');
+      // Don't set state on error if widget is disposed
     }
-
-    // Fetch today's already consumed food from BOTH collections
-    final today = DateTime.now();
-    final dateStr =
-        "${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
-
-    int totalCals = 0;
-    int totalCarbs = 0;
-    int totalProtein = 0;
-    int totalFat = 0;
-
-    // 1. Fetch from NEW 'meals' collection
-    final mealsSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('meals')
-        .where('date', isEqualTo: dateStr)
-        .get();
-
-    for (var mealDoc in mealsSnapshot.docs) {
-      final mealData = mealDoc.data();
-      
-      // Use aggregated totals from meal document
-      totalCals += _parseFirestoreNumber(mealData['totalCalories']);
-      totalCarbs += _parseFirestoreNumber(mealData['totalCarbs']);
-      totalProtein += _parseFirestoreNumber(mealData['totalProtein']);
-      totalFat += _parseFirestoreNumber(mealData['totalFat']);
-    }
-
-    // 2. Also fetch from OLD 'barcodes' collection for backward compatibility
-    final barcodesSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('barcodes')
-        .where('date', isEqualTo: dateStr)
-        .get();
-
-    for (var doc in barcodesSnapshot.docs) {
-      final mealData = doc.data();
-      totalCals += _parseFirestoreNumber(mealData['calories']);
-      totalCarbs += _parseFirestoreNumber(mealData['carbs']);
-      totalProtein += _parseFirestoreNumber(mealData['protein']);
-      totalFat += _parseFirestoreNumber(mealData['fat']);
-    }
-
-    setState(() {
-      todayCaloriesConsumed = totalCals;
-      todayCarbsConsumed = totalCarbs;
-      todayProteinConsumed = totalProtein;
-      todayFatConsumed = totalFat;
-    });
-
-    print(
-      'Today consumed so far (from meals + barcodes): $totalCals cal, $totalCarbs carbs, $totalProtein protein, $totalFat fat',
-    );
-  } catch (e) {
-    print('Error fetching user goals and today intake: $e');
   }
-}
   // ============================================================================
   // Portion Size Estimation using Computer Vision
   // ============================================================================
-  
+
   // Helper to safely parse Firestore numbers (handles int, double, String, null)
   int _parseFirestoreNumber(dynamic value) {
     if (value == null) return 0;
@@ -1713,29 +2199,51 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     // This is a rough estimate and can be improved with plate detection
     final imageWidth = _processedImage?.width.toDouble() ?? 512.0;
     final imageHeight = _processedImage?.height.toDouble() ?? 512.0;
+
+    // Validate image dimensions
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      print('Warning: Invalid image dimensions for portion estimation');
+      return kMinPortionGrams; // Return minimum as fallback
+    }
+
     final imageArea = imageWidth * imageHeight;
+    if (imageArea <= 0) {
+      print('Warning: Invalid image area for portion estimation');
+      return kMinPortionGrams;
+    }
 
     // Estimate scale: if we detect a plate, use it; otherwise use image dimensions
     double scaleFactor;
-    if (plateSizeCm != null) {
+    if (plateSizeCm != null && plateSizeCm > 0) {
       // Plate detected: use it as reference
-      // Assume plate takes up ~60% of image area on average
-      final plateAreaPixels = imageArea * 0.6;
+      // Assume plate takes up typical percentage of image area
+      final plateAreaPixels = imageArea * kTypicalPlateAreaPercentage;
       final plateAreaCm2 = math.pi * math.pow(plateSizeCm / 2, 2);
-      scaleFactor = plateAreaCm2 / plateAreaPixels;
+
+      if (plateAreaPixels > 0) {
+        scaleFactor = plateAreaCm2 / plateAreaPixels;
+      } else {
+        // Fallback if calculation fails
+        scaleFactor = kEstimatedRealAreaCm2 / imageArea;
+      }
     } else {
       // No plate detected: estimate based on image dimensions
-      // Assume image represents ~25cm x 25cm area (typical plate size)
-      final estimatedRealAreaCm2 = 25.0 * 25.0; // 625 cm²
-      scaleFactor = estimatedRealAreaCm2 / imageArea;
+      // Assume image represents typical plate size area
+      scaleFactor = kEstimatedRealAreaCm2 / imageArea;
+    }
+
+    // Validate scale factor
+    if (scaleFactor <= 0 || scaleFactor.isInfinite || scaleFactor.isNaN) {
+      print('Warning: Invalid scale factor calculated, using fallback');
+      scaleFactor = kEstimatedRealAreaCm2 / imageArea;
     }
 
     // Calculate estimated grams: area (cm²) * density (g/cm²)
     final areaCm2 = area * scaleFactor;
     final estimatedGrams = (areaCm2 * density).round();
 
-    // Clamp to reasonable range (50g to 1000g)
-    return estimatedGrams.clamp(50, 1000);
+    // Clamp to reasonable range
+    return estimatedGrams.clamp(kMinPortionGrams, kMaxPortionGrams);
   }
 
   /// Get food density in grams per square centimeter
@@ -1811,31 +2319,50 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     return 0.4;
   }
 
-  /// Detect plate size as a reference object (future enhancement)
+  /// Detect plate size as a reference object using heuristics
   /// Returns plate diameter in cm, or null if plate not detected
+  ///
+  /// This uses simple heuristics based on image aspect ratio and dimensions.
+  /// For production, consider implementing proper computer vision plate detection
+  /// using edge detection, circle detection, or a dedicated ML model.
   double? _detectPlateSize() {
-    // TODO: Implement plate detection using computer vision
-    // For now, return null to use image-based estimation
-    // Future: Use edge detection, circle detection, or ML model to detect plates
-
-    // Simple heuristic: if image has circular/oval regions, might be a plate
-    // This is a placeholder for future implementation
     if (_processedImage == null) return null;
 
-    // For now, estimate based on image size
-    // Typical phone camera: assume ~20cm plate if image is well-framed
-    final imageWidth = _processedImage!.width;
-    final imageHeight = _processedImage!.height;
+    try {
+      final imageWidth = _processedImage!.width;
+      final imageHeight = _processedImage!.height;
 
-    // If image is roughly square and well-framed, estimate plate size
-    final aspectRatio = imageWidth / imageHeight;
-    if (aspectRatio > 0.8 && aspectRatio < 1.2) {
-      // Square-ish image: likely a plate
-      return 20.0; // Estimate 20cm plate
+      if (imageWidth <= 0 || imageHeight <= 0) return null;
+
+      // Heuristic 1: Aspect ratio check (square-ish images often contain plates)
+      final aspectRatio = imageWidth / imageHeight;
+      if (aspectRatio >= kPlateAspectRatioMin &&
+          aspectRatio <= kPlateAspectRatioMax) {
+        // Square-ish image: likely a plate
+        // Estimate based on image dimensions (typical phone camera)
+        // Assume image represents roughly 25-30cm field of view
+        final avgDimension = (imageWidth + imageHeight) / 2.0;
+
+        // Scale factor: typical phone camera at ~30cm distance
+        // Rough estimate: 2000px width ≈ 30cm field of view
+        final estimatedPlateSize = (avgDimension / 2000.0) * 30.0;
+
+        // Clamp to reasonable plate sizes (10cm to 30cm)
+        return estimatedPlateSize.clamp(10.0, 30.0);
+      }
+
+      // Heuristic 2: Image size check (very large images might be close-ups)
+      if (imageWidth > 1000 && imageHeight > 1000) {
+        // Large image: might be close-up, estimate smaller plate
+        return kDefaultPlateSizeCm;
+      }
+
+      // No clear plate detected, return null to use image-based estimation
+      return null;
+    } catch (e) {
+      print('Error in plate detection: $e');
+      return null;
     }
-
-    // Otherwise, use image-based estimation
-    return null;
   }
 
   /// Calculate total calories for THIS meal only using gramsAmount
@@ -1874,40 +2401,40 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   /// Update animations when nutrition values change
-void _updateAnimations() {
-  if (!_userGoalsLoaded || dailyGoal == 0) return;
+  void _updateAnimations() {
+    if (!_userGoalsLoaded || dailyGoal == 0) return;
 
-  // Calculate current values
-  final thisMealCalories = _calculateTotalCalories();
-  final thisMealMacros = _calculateTotalMacros();
+    // Calculate current values
+    final thisMealCalories = _calculateTotalCalories();
+    final thisMealMacros = _calculateTotalMacros();
 
-  final caloriesAfterMeal = todayCaloriesConsumed + thisMealCalories;
-  final carbsAfterMeal = todayCarbsConsumed + (thisMealMacros['carbs'] ?? 0);
-  final proteinAfterMeal =
-      todayProteinConsumed + (thisMealMacros['protein'] ?? 0);
-  final fatAfterMeal = todayFatConsumed + (thisMealMacros['fat'] ?? 0);
+    final caloriesAfterMeal = todayCaloriesConsumed + thisMealCalories;
+    final carbsAfterMeal = todayCarbsConsumed + (thisMealMacros['carbs'] ?? 0);
+    final proteinAfterMeal =
+        todayProteinConsumed + (thisMealMacros['protein'] ?? 0);
+    final fatAfterMeal = todayFatConsumed + (thisMealMacros['fat'] ?? 0);
 
-  // Calculate ACTUAL progress percentages (0.0 to 1.0, or higher if exceeded)
-  final calorieProgress = dailyGoal > 0
-      ? (caloriesAfterMeal / dailyGoal).clamp(0.0, 1.5)
-      : 0.0;
-  final carbsProgress = carbsTarget > 0
-      ? (carbsAfterMeal / carbsTarget).clamp(0.0, 1.5)
-      : 0.0;
-  final proteinProgress = proteinTarget > 0
-      ? (proteinAfterMeal / proteinTarget).clamp(0.0, 1.5)
-      : 0.0;
-  final fatProgress = fatTarget > 0
-      ? (fatAfterMeal / fatTarget).clamp(0.0, 1.5)
-      : 0.0;
+    // Calculate ACTUAL progress percentages (0.0 to kMaxAnimationProgress, or higher if exceeded)
+    final calorieProgress = dailyGoal > 0
+        ? (caloriesAfterMeal / dailyGoal).clamp(0.0, kMaxAnimationProgress)
+        : 0.0;
+    final carbsProgress = carbsTarget > 0
+        ? (carbsAfterMeal / carbsTarget).clamp(0.0, kMaxAnimationProgress)
+        : 0.0;
+    final proteinProgress = proteinTarget > 0
+        ? (proteinAfterMeal / proteinTarget).clamp(0.0, kMaxAnimationProgress)
+        : 0.0;
+    final fatProgress = fatTarget > 0
+        ? (fatAfterMeal / fatTarget).clamp(0.0, kMaxAnimationProgress)
+        : 0.0;
 
-  // ✅ FIX: Animate to ACTUAL progress (not normalized)
-  // For display, we'll handle the clamping in the painter
-  _calorieAnimationController.animateTo(calorieProgress.clamp(0.0, 1.0));
-  _carbsAnimationController.animateTo(carbsProgress.clamp(0.0, 1.0));
-  _proteinAnimationController.animateTo(proteinProgress.clamp(0.0, 1.0));
-  _fatAnimationController.animateTo(fatProgress.clamp(0.0, 1.0));
-}
+    // ✅ FIX: Animate to ACTUAL progress (clamped to 1.0 for visual display)
+    // The painter will handle overflow visualization separately
+    _calorieAnimationController.animateTo(calorieProgress.clamp(0.0, 1.0));
+    _carbsAnimationController.animateTo(carbsProgress.clamp(0.0, 1.0));
+    _proteinAnimationController.animateTo(proteinProgress.clamp(0.0, 1.0));
+    _fatAnimationController.animateTo(fatProgress.clamp(0.0, 1.0));
+  }
 
   // Continue to batch 5...
 
@@ -2121,52 +2648,56 @@ void _updateAnimations() {
           _buildTotalIntake(),
           _buildModifyFoodSection(),
           const SizedBox(height: 24),
-// Save button
-Padding(
-  padding: const EdgeInsets.symmetric(horizontal: 16),
-  child: SizedBox(
-    width: double.infinity,
-    height: 56,
-    child: ElevatedButton(
-      onPressed: _isProcessing ? null : _saveMealToFirestore,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.green,
-        disabledBackgroundColor: Colors.grey,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(32),
-        ),
-        elevation: 2,
-        shadowColor: Colors.green.withOpacity(0.3),
-      ),
-      child: _isProcessing
-          ? const SizedBox(
-              height: 20,
-              width: 20,
-              child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2,
-              ),
-            )
-          : Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white, size: 22),
-                const SizedBox(width: 10),
-                Text(
-                  'Save Meal (${_segmentedFoods.length} item${_segmentedFoods.length > 1 ? "s" : ""})',
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: 0.5,
+          // Save button
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: _isProcessing ? null : _saveMealToFirestore,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  disabledBackgroundColor: Colors.grey,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(32),
                   ),
+                  elevation: 2,
+                  shadowColor: Colors.green.withOpacity(0.3),
                 ),
-              ],
+                child: _isProcessing
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.check_circle,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Save Meal (${_segmentedFoods.length} item${_segmentedFoods.length > 1 ? "s" : ""})',
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
             ),
-    ),
-  ),
-),
-const SizedBox(height: 80),
+          ),
+          const SizedBox(height: 80),
         ],
       ),
     );
@@ -2238,7 +2769,7 @@ const SizedBox(height: 80),
     );
   }
 
-  /// IMPROVED: Better coordinate scaling from segmentation to display
+  /// IMPROVED: Better coordinate scaling from segmentation to display with validation
   List<Widget> _buildFoodLabels() {
     List<Widget> labels = [];
 
@@ -2246,13 +2777,36 @@ const SizedBox(height: 80),
     final displayHeight = 300.0;
     final displayWidth = MediaQuery.of(context).size.width - 32;
 
+    // Validate display dimensions
+    if (displayWidth <= 0 || displayHeight <= 0) {
+      print('Warning: Invalid display dimensions for food labels');
+      return labels;
+    }
+
     // Get original image dimensions for proper scaling
     final originalWidth = _originalImage?.width.toDouble() ?? displayWidth;
     final originalHeight = _originalImage?.height.toDouble() ?? displayHeight;
 
+    // Validate original image dimensions
+    if (originalWidth <= 0 || originalHeight <= 0) {
+      print('Warning: Invalid original image dimensions for food labels');
+      return labels;
+    }
+
     // Calculate display aspect ratio vs original aspect ratio
     final displayAspect = displayWidth / displayHeight;
     final originalAspect = originalWidth / originalHeight;
+
+    // Validate aspect ratios
+    if (displayAspect <= 0 ||
+        originalAspect <= 0 ||
+        displayAspect.isInfinite ||
+        originalAspect.isInfinite ||
+        displayAspect.isNaN ||
+        originalAspect.isNaN) {
+      print('Warning: Invalid aspect ratios for food labels');
+      return labels;
+    }
 
     // Calculate actual rendered image dimensions (considering BoxFit.cover)
     double renderedWidth, renderedHeight;
@@ -2270,6 +2824,17 @@ const SizedBox(height: 80),
       offsetY = -(renderedHeight - displayHeight) / 2;
     }
 
+    // Validate rendered dimensions
+    if (renderedWidth <= 0 ||
+        renderedHeight <= 0 ||
+        renderedWidth.isInfinite ||
+        renderedHeight.isInfinite ||
+        renderedWidth.isNaN ||
+        renderedHeight.isNaN) {
+      print('Warning: Invalid rendered dimensions for food labels');
+      return labels;
+    }
+
     for (int i = 0; i < _segmentedFoods.length && i < 5; i++) {
       final food = _segmentedFoods[i];
       if (food.foodName != null &&
@@ -2279,13 +2844,37 @@ const SizedBox(height: 80),
         final segWidth = food.maskWidth.toDouble();
         final segHeight = food.maskHeight.toDouble();
 
+        // Validate segmentation dimensions
+        if (segWidth <= 0 || segHeight <= 0) {
+          print('Warning: Invalid segmentation dimensions for food ${i + 1}');
+          continue;
+        }
+
         final originalX = (food.center!.dx / segWidth) * originalWidth;
         final originalY = (food.center!.dy / segHeight) * originalHeight;
+
+        // Validate scaled coordinates
+        if (originalX.isNaN ||
+            originalY.isNaN ||
+            originalX.isInfinite ||
+            originalY.isInfinite) {
+          print('Warning: Invalid scaled coordinates for food ${i + 1}');
+          continue;
+        }
 
         // Scale from original to rendered coordinates
         final renderedX = (originalX / originalWidth) * renderedWidth + offsetX;
         final renderedY =
             (originalY / originalHeight) * renderedHeight + offsetY;
+
+        // Validate rendered coordinates
+        if (renderedX.isNaN ||
+            renderedY.isNaN ||
+            renderedX.isInfinite ||
+            renderedY.isInfinite) {
+          print('Warning: Invalid rendered coordinates for food ${i + 1}');
+          continue;
+        }
 
         // Only show if within visible bounds
         if (renderedX >= 0 &&
@@ -2368,9 +2957,9 @@ const SizedBox(height: 80),
     final proteinLeft = proteinTarget - proteinAfterMeal;
     final fatLeft = fatTarget - fatAfterMeal;
 
-    // Calculate percentage for progress ring (cap at 1.5 for visual purposes)
+    // Calculate percentage for progress ring (cap at max for visual purposes)
     final percentage = dailyGoal > 0
-        ? (caloriesAfterMeal / dailyGoal).clamp(0.0, 1.5)
+        ? (caloriesAfterMeal / dailyGoal).clamp(0.0, kMaxAnimationProgress)
         : 0.0;
 
     return Container(
@@ -2568,88 +3157,88 @@ const SizedBox(height: 80),
   }
 
   /// IMPROVED: Fixed overflow - shows "exceeded by X" instead of overflowing UI
-Widget _buildMacroCircle(
-  String label,
-  int current,
-  int target,
-  Color color,
-  int left, {
-  double size = 50,
-}) {
-  // ✅ FIX: Calculate ACTUAL progress (not clamped yet)
-  double progress = target > 0 ? (current / target) : 0.0;
+  Widget _buildMacroCircle(
+    String label,
+    int current,
+    int target,
+    Color color,
+    int left, {
+    double size = 50,
+  }) {
+    // ✅ FIX: Calculate ACTUAL progress (not clamped yet)
+    double progress = target > 0 ? (current / target) : 0.0;
 
-  return Column(
-    children: [
-      Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          color: color,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      const SizedBox(height: 8),
-      SizedBox(
-        width: size,
-        height: size,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            AnimatedBuilder(
-              animation: _getMacroAnimation(label),
-              builder: (context, child) {
-                return CustomPaint(
-                  size: Size(size, size),
-                  painter: AnimatedSemiCircleProgressPainter(
-                    progress: progress, // ✅ Pass actual progress
-                    backgroundColor: Colors.grey[200]!,
-                    progressColor: left >= 0 ? color : Colors.red,
-                    strokeWidth: 4,
-                    animation: _getMacroAnimation(label),
-                  ),
-                );
-              },
-            ),
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '$current',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  Text(
-                    '/$target g',
-                    style: TextStyle(fontSize: 9, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 4),
-      SizedBox(
-        width: size + 10,
-        child: Text(
-          left >= 0 ? '${left}g left' : '${left.abs()}g over',
+    return Column(
+      children: [
+        Text(
+          label,
           style: TextStyle(
-            fontSize: 11,
-            color: left >= 0 ? Colors.grey[600] : Colors.red[400],
+            fontSize: 12,
+            color: color,
+            fontWeight: FontWeight.w500,
           ),
-          textAlign: TextAlign.center,
-          overflow: TextOverflow.ellipsis,
-          maxLines: 1,
         ),
-      ),
-    ],
-  );
-}
+        const SizedBox(height: 8),
+        SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              AnimatedBuilder(
+                animation: _getMacroAnimation(label),
+                builder: (context, child) {
+                  return CustomPaint(
+                    size: Size(size, size),
+                    painter: AnimatedSemiCircleProgressPainter(
+                      progress: progress, // ✅ Pass actual progress
+                      backgroundColor: Colors.grey[200]!,
+                      progressColor: left >= 0 ? color : Colors.red,
+                      strokeWidth: 4,
+                      animation: _getMacroAnimation(label),
+                    ),
+                  );
+                },
+              ),
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$current',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    Text(
+                      '/$target g',
+                      style: TextStyle(fontSize: 9, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: size + 10,
+          child: Text(
+            left >= 0 ? '${left}g left' : '${left.abs()}g over',
+            style: TextStyle(
+              fontSize: 11,
+              color: left >= 0 ? Colors.grey[600] : Colors.red[400],
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ),
+      ],
+    );
+  }
 
   // Continue to batch 7...
 
@@ -2666,29 +3255,29 @@ Widget _buildMacroCircle(
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   const Text(
                     'Modify food information',
                     style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
                     ),
                   ),
                   const SizedBox(height: 4),
                   const Text(
                     'Swipe up on a food to delete',
                     style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w400,
+                      fontSize: 13,
+                      color: Colors.grey,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
-                  ],
-                ),
-              // Merge and Split action buttons
+                ],
+              ),
+              // Merge action button
               Row(
                 children: [
                   if (_segmentedFoods.length >= 2)
@@ -2881,19 +3470,32 @@ Widget _buildMacroCircle(
                     ),
                     child: foodImage,
                   ),
-                  // Action buttons (Remove and Split)
+                  // Action buttons (Edit Nutrition and Remove)
                   Positioned(
                     top: 8,
                     right: 8,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Split button
+                        // Edit Nutrition button
                         GestureDetector(
                           onTap: () {
-                            _showSplitDialog(index);
+                            _showEditNutritionDialog(food, index);
                           },
-                          
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            margin: const EdgeInsets.only(right: 4),
+                            decoration: const BoxDecoration(
+                              color: Colors.blue,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.edit,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
                         ),
                         // Remove button
                         GestureDetector(
@@ -2981,46 +3583,142 @@ Widget _buildMacroCircle(
   }
 
   void _showEditFoodDialog(SegmentedFood food, int index) {
+    // Combine per-region predictions (more relevant) with global predictions
+    final combinedPredictions = <FoodPrediction>[];
+
+    // Prioritize per-region predictions (more accurate for this specific region)
+    if (food.perRegionPredictions.isNotEmpty) {
+      combinedPredictions.addAll(food.perRegionPredictions);
+    }
+
+    // Add global predictions (avoid duplicates)
+    final existingNames = combinedPredictions
+        .map((p) => p.foodName.toLowerCase())
+        .toSet();
+    for (final pred in _topPredictions) {
+      if (!existingNames.contains(pred.foodName.toLowerCase())) {
+        combinedPredictions.add(pred);
+      }
+    }
+
+    // Sort by confidence
+    combinedPredictions.sort((a, b) => b.confidence.compareTo(a.confidence));
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => EditFoodPage(
           food: food,
           originalImage: _originalImage!,
-          allPredictions: _topPredictions,
+          allPredictions: combinedPredictions,
           onUpdate: (updatedFood) {
-            setState(() {
-              _segmentedFoods[index] = updatedFood;
-            });
-            _updateAnimations();
+            if (mounted) {
+              setState(() {
+                _segmentedFoods[index] = updatedFood;
+              });
+              _updateAnimations();
+            }
           },
         ),
       ),
     );
   }
 
-  void _showAddFoodDialog() {
-    final TextEditingController _foodNameController = TextEditingController();
+  /// Show dialog to edit calories and macros for a food item
+  void _showEditNutritionDialog(SegmentedFood food, int index) {
+    final TextEditingController _caloriesController = TextEditingController(
+      text: (food.caloriesPer100g ?? 150).toString(),
+    );
+    final TextEditingController _carbsController = TextEditingController(
+      text: (food.macrosPer100g?['carbs'] ?? 30).toString(),
+    );
+    final TextEditingController _proteinController = TextEditingController(
+      text: (food.macrosPer100g?['protein'] ?? 10).toString(),
+    );
+    final TextEditingController _fatController = TextEditingController(
+      text: (food.macrosPer100g?['fat'] ?? 5).toString(),
+    );
+    final TextEditingController _gramsController = TextEditingController(
+      text: food.gramsAmount.toString(),
+    );
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add Food'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'You can manually add food items that were not detected automatically.',
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _foodNameController,
-              decoration: const InputDecoration(
-                labelText: 'Food Name',
-                border: OutlineInputBorder(),
+        title: Text('Edit Nutrition: ${food.foodName ?? 'Food'}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Edit calories and macros for this food item.',
+                style: TextStyle(fontSize: 14),
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              TextField(
+                controller: _gramsController,
+                decoration: const InputDecoration(
+                  labelText: 'Amount (grams) *',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _caloriesController,
+                decoration: const InputDecoration(
+                  labelText: 'Calories per 100g',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Macros per 100g:',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _carbsController,
+                      decoration: const InputDecoration(
+                        labelText: 'Carbs (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _proteinController,
+                      decoration: const InputDecoration(
+                        labelText: 'Protein (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _fatController,
+                      decoration: const InputDecoration(
+                        labelText: 'Fat (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -3029,44 +3727,292 @@ Widget _buildMacroCircle(
           ),
           ElevatedButton(
             onPressed: () {
+              if (!mounted) return;
+
+              // Parse values with validation
+              final grams =
+                  int.tryParse(_gramsController.text) ?? food.gramsAmount;
+              final calories =
+                  int.tryParse(_caloriesController.text) ??
+                  food.caloriesPer100g ??
+                  150;
+              final carbs =
+                  int.tryParse(_carbsController.text) ??
+                  food.macrosPer100g?['carbs'] ??
+                  30;
+              final protein =
+                  int.tryParse(_proteinController.text) ??
+                  food.macrosPer100g?['protein'] ??
+                  10;
+              final fat =
+                  int.tryParse(_fatController.text) ??
+                  food.macrosPer100g?['fat'] ??
+                  5;
+
+              // Validate grams
+              final validGrams = grams.clamp(
+                kMinPortionGrams,
+                kMaxPortionGrams,
+              );
+
+              if (mounted) {
+                setState(() {
+                  final updatedFood = SegmentedFood(
+                    id: food.id,
+                    boundingBox: food.boundingBox,
+                    mask: food.mask,
+                    maskWidth: food.maskWidth,
+                    maskHeight: food.maskHeight,
+                    confidence: food.confidence,
+                    foodName: food.foodName,
+                    segmentationSource: food.segmentationSource,
+                    classificationSource: food.classificationSource,
+                    caloriesPer100g: calories,
+                    macrosPer100g: {
+                      'carbs': carbs,
+                      'protein': protein,
+                      'fat': fat,
+                    },
+                    center: food.center,
+                    gramsAmount: validGrams,
+                  );
+                  // Copy perRegionPredictions from original food
+                  updatedFood.perRegionPredictions = List.from(
+                    food.perRegionPredictions,
+                  );
+                  _segmentedFoods[index] = updatedFood;
+                });
+                _updateAnimations();
+              }
+
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddFoodDialog() {
+    final TextEditingController _foodNameController = TextEditingController();
+    final TextEditingController _caloriesController = TextEditingController(
+      text: '150',
+    );
+    final TextEditingController _carbsController = TextEditingController(
+      text: '30',
+    );
+    final TextEditingController _proteinController = TextEditingController(
+      text: '10',
+    );
+    final TextEditingController _fatController = TextEditingController(
+      text: '5',
+    );
+    final TextEditingController _gramsController = TextEditingController(
+      text: '100',
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Food Manually'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Add a food item that was not detected automatically.',
+                style: TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _foodNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Food Name *',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g., Grilled Chicken',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _gramsController,
+                decoration: const InputDecoration(
+                  labelText: 'Amount (grams) *',
+                  border: OutlineInputBorder(),
+                  hintText: '100',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _caloriesController,
+                decoration: const InputDecoration(
+                  labelText: 'Calories per 100g',
+                  border: OutlineInputBorder(),
+                  hintText: '150',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Macros per 100g (optional):',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _carbsController,
+                      decoration: const InputDecoration(
+                        labelText: 'Carbs (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _proteinController,
+                      decoration: const InputDecoration(
+                        labelText: 'Protein (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _fatController,
+                      decoration: const InputDecoration(
+                        labelText: 'Fat (g)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (!mounted) return;
+
               final customName = _foodNameController.text.trim().isEmpty
                   ? 'Custom Food'
                   : _foodNameController.text.trim();
 
-              // Create a new food item with fallback mask
-              final width = 256;
-              final height = 256;
-              final mask = Uint8List(width * height);
+              // Parse values with validation
+              final grams = int.tryParse(_gramsController.text) ?? 100;
+              final calories = int.tryParse(_caloriesController.text) ?? 150;
+              final carbs = int.tryParse(_carbsController.text) ?? 30;
+              final protein = int.tryParse(_proteinController.text) ?? 10;
+              final fat = int.tryParse(_fatController.text) ?? 5;
 
-              // Fill center region
-              for (int y = height ~/ 4; y < height * 3 ~/ 4; y++) {
-                for (int x = width ~/ 4; x < width * 3 ~/ 4; x++) {
-                  mask[y * width + x] = 255;
+              // Validate grams
+              final validGrams = grams.clamp(
+                kMinPortionGrams,
+                kMaxPortionGrams,
+              );
+
+              // Create a new food item with improved mask based on image dimensions
+              int maskWidth = 256;
+              int maskHeight = 256;
+
+              if (_processedImage != null) {
+                maskWidth = _processedImage!.width;
+                maskHeight = _processedImage!.height;
+              }
+
+              final mask = Uint8List(maskWidth * maskHeight);
+
+              // Fill center region (improved bounding box calculation)
+              final centerX = maskWidth ~/ 2;
+              final centerY = maskHeight ~/ 2;
+              final boxWidth = (maskWidth * 0.4).round();
+              final boxHeight = (maskHeight * 0.4).round();
+
+              for (
+                int y = (centerY - boxHeight ~/ 2).clamp(0, maskHeight);
+                y < (centerY + boxHeight ~/ 2).clamp(0, maskHeight);
+                y++
+              ) {
+                for (
+                  int x = (centerX - boxWidth ~/ 2).clamp(0, maskWidth);
+                  x < (centerX + boxWidth ~/ 2).clamp(0, maskWidth);
+                  x++
+                ) {
+                  mask[y * maskWidth + x] = 255;
                 }
               }
 
-              setState(() {
-                _segmentedFoods.add(
-                  SegmentedFood(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    boundingBox: Rect.fromLTWH(
-                      width / 4,
-                      height / 4,
-                      width / 2,
-                      height / 2,
+              // Calculate bounding box from mask
+              int minX = maskWidth, minY = maskHeight, maxX = 0, maxY = 0;
+              bool hasMask = false;
+
+              for (int y = 0; y < maskHeight; y++) {
+                for (int x = 0; x < maskWidth; x++) {
+                  if (mask[y * maskWidth + x] > 0) {
+                    hasMask = true;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                  }
+                }
+              }
+
+              if (!hasMask) {
+                // Fallback to center region
+                minX = centerX - boxWidth ~/ 2;
+                minY = centerY - boxHeight ~/ 2;
+                maxX = centerX + boxWidth ~/ 2;
+                maxY = centerY + boxHeight ~/ 2;
+              }
+
+              if (mounted) {
+                setState(() {
+                  _segmentedFoods.add(
+                    SegmentedFood(
+                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                      boundingBox: Rect.fromLTRB(
+                        minX.toDouble(),
+                        minY.toDouble(),
+                        maxX.toDouble(),
+                        maxY.toDouble(),
+                      ),
+                      mask: mask,
+                      maskWidth: maskWidth,
+                      maskHeight: maskHeight,
+                      confidence: 0.5,
+                      foodName: customName,
+                      caloriesPer100g: calories,
+                      macrosPer100g: {
+                        'carbs': carbs,
+                        'protein': protein,
+                        'fat': fat,
+                      },
+                      gramsAmount: validGrams,
+                      segmentationSource: 'Manual',
                     ),
-                    mask: mask,
-                    maskWidth: width,
-                    maskHeight: height,
-                    confidence: 0.5,
-                    foodName: customName,
-                    caloriesPer100g: 150,
-                    macrosPer100g: {'carbs': 30, 'protein': 10, 'fat': 5},
-                    gramsAmount: 100,
-                  ),
-                );
-              });
-              _updateAnimations();
+                  );
+                });
+                _updateAnimations();
+              }
+
               Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
@@ -3107,17 +4053,28 @@ Widget _buildMacroCircle(
   }
 
   /// Merge two detected regions (e.g., rice + sauce)
+  /// Handles edge cases like different mask sizes and invalid indices
   void mergeFoods(int index1, int index2) {
-    if (index1 >= _segmentedFoods.length ||
+    // Validate indices
+    if (index1 < 0 ||
+        index2 < 0 ||
+        index1 >= _segmentedFoods.length ||
         index2 >= _segmentedFoods.length ||
         index1 == index2) {
+      print('Warning: Invalid indices for merge: $index1, $index2');
       return;
     }
 
     final food1 = _segmentedFoods[index1];
     final food2 = _segmentedFoods[index2];
 
-    // Combine bounding boxes
+    // Validate food data
+    if (food1.mask.isEmpty || food2.mask.isEmpty) {
+      print('Warning: Cannot merge foods with empty masks');
+      return;
+    }
+
+    // Combine bounding boxes with validation
     final mergedBox = Rect.fromLTRB(
       math.min(food1.boundingBox.left, food2.boundingBox.left),
       math.min(food1.boundingBox.top, food2.boundingBox.top),
@@ -3125,49 +4082,80 @@ Widget _buildMacroCircle(
       math.max(food1.boundingBox.bottom, food2.boundingBox.bottom),
     );
 
-    // Combine masks (union)
+    // Validate merged bounding box
+    if (mergedBox.width <= 0 || mergedBox.height <= 0) {
+      print('Warning: Invalid merged bounding box');
+      return;
+    }
+
+    // Combine masks (union) - handle different mask sizes
     final maxWidth = math.max(food1.maskWidth, food2.maskWidth);
     final maxHeight = math.max(food1.maskHeight, food2.maskHeight);
+
+    // Validate mask dimensions
+    if (maxWidth <= 0 || maxHeight <= 0) {
+      print('Warning: Invalid mask dimensions for merge');
+      return;
+    }
+
     final mergedMask = Uint8List(maxWidth * maxHeight);
 
-    // Copy food1 mask
+    // Copy food1 mask with coordinate scaling if needed
     for (int y = 0; y < food1.maskHeight; y++) {
       for (int x = 0; x < food1.maskWidth; x++) {
         final idx = y * food1.maskWidth + x;
         if (idx < food1.mask.length && food1.mask[idx] > 0) {
-          final newIdx = y * maxWidth + x;
-          if (newIdx < mergedMask.length) {
+          // Scale coordinates if mask sizes differ
+          final scaledX = (x * maxWidth / food1.maskWidth).round().clamp(
+            0,
+            maxWidth - 1,
+          );
+          final scaledY = (y * maxHeight / food1.maskHeight).round().clamp(
+            0,
+            maxHeight - 1,
+          );
+          final newIdx = scaledY * maxWidth + scaledX;
+          if (newIdx >= 0 && newIdx < mergedMask.length) {
             mergedMask[newIdx] = 255;
           }
         }
       }
     }
 
-    // Add food2 mask
+    // Add food2 mask with coordinate scaling if needed
     for (int y = 0; y < food2.maskHeight; y++) {
       for (int x = 0; x < food2.maskWidth; x++) {
         final idx = y * food2.maskWidth + x;
         if (idx < food2.mask.length && food2.mask[idx] > 0) {
-          final newIdx = y * maxWidth + x;
-          if (newIdx < mergedMask.length) {
+          // Scale coordinates if mask sizes differ
+          final scaledX = (x * maxWidth / food2.maskWidth).round().clamp(
+            0,
+            maxWidth - 1,
+          );
+          final scaledY = (y * maxHeight / food2.maskHeight).round().clamp(
+            0,
+            maxHeight - 1,
+          );
+          final newIdx = scaledY * maxWidth + scaledX;
+          if (newIdx >= 0 && newIdx < mergedMask.length) {
             mergedMask[newIdx] = 255;
           }
         }
       }
     }
-      //Smart naming logic
-  String mergedName;
-  final name1 = food1.foodName ?? 'Food';
-  final name2 = food2.foodName ?? 'Food';
-  
-  // Check if both foods are the same
-  if (name1.toLowerCase().trim() == name2.toLowerCase().trim()) {
-    // Same food - just use the name once
-    mergedName = name1;
-  } else {
-    // Different foods - combine names
-    mergedName = '$name1 with $name2';
-  }
+    //Smart naming logic
+    String mergedName;
+    final name1 = food1.foodName ?? 'Food';
+    final name2 = food2.foodName ?? 'Food';
+
+    // Check if both foods are the same
+    if (name1.toLowerCase().trim() == name2.toLowerCase().trim()) {
+      // Same food - just use the name once
+      mergedName = name1;
+    } else {
+      // Different foods - combine names
+      mergedName = '$name1 with $name2';
+    }
 
     // Calculate combined nutrition (weighted average by grams)
     final totalGrams = food1.gramsAmount + food2.gramsAmount;
@@ -3196,82 +4184,28 @@ Widget _buildMacroCircle(
 
     // Create merged food
     final mergedFood = SegmentedFood(
-    id: DateTime.now().millisecondsSinceEpoch.toString(),
-    boundingBox: mergedBox,
-    mask: mergedMask,
-    maskWidth: maxWidth,
-    maskHeight: maxHeight,
-    confidence: (food1.confidence + food2.confidence) / 2,
-    foodName: mergedName,  // ✅ Use smart merged name
-    segmentationSource: 'Merged',
-    caloriesPer100g: mergedCaloriesPer100g,
-    macrosPer100g: mergedMacrosPer100g,
-    center: Offset(
-      (mergedBox.left + mergedBox.right) / 2,
-      (mergedBox.top + mergedBox.bottom) / 2,
-    ),
-    gramsAmount: totalGrams,
-  );
-
-  setState(() {
-    // Remove both foods and add merged one
-    _segmentedFoods.removeAt(math.max(index1, index2));
-    _segmentedFoods.removeAt(math.min(index1, index2));
-    _segmentedFoods.add(mergedFood);
-  });
-
-  _updateAnimations();
-}
-
-  /// Split one region into multiple (e.g., mixed plate)
-  void splitFood(int index, Map<String, double> components) {
-    // components: {'Rice': 0.5, 'Chicken': 0.3, 'Vegetables': 0.2}
-    if (index >= _segmentedFoods.length || components.isEmpty) {
-      return;
-    }
-
-    final originalFood = _segmentedFoods[index];
-    final totalPercentage = components.values.fold(
-      0.0,
-      (sum, val) => sum + val,
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      boundingBox: mergedBox,
+      mask: mergedMask,
+      maskWidth: maxWidth,
+      maskHeight: maxHeight,
+      confidence: (food1.confidence + food2.confidence) / 2,
+      foodName: mergedName, // ✅ Use smart merged name
+      segmentationSource: 'Merged',
+      caloriesPer100g: mergedCaloriesPer100g,
+      macrosPer100g: mergedMacrosPer100g,
+      center: Offset(
+        (mergedBox.left + mergedBox.right) / 2,
+        (mergedBox.top + mergedBox.bottom) / 2,
+      ),
+      gramsAmount: totalGrams,
     );
 
-    if (totalPercentage.abs() - 1.0 > 0.01) {
-      // Normalize if percentages don't sum to 1.0
-      final scale = 1.0 / totalPercentage;
-      components = components.map((key, value) => MapEntry(key, value * scale));
-    }
-
-    final newFoods = <SegmentedFood>[];
-
-    components.forEach((foodName, percentage) {
-      final splitGrams = (originalFood.gramsAmount * percentage).round();
-      final splitCaloriesPer100g = originalFood.caloriesPer100g ?? 150;
-      final splitMacrosPer100g =
-          originalFood.macrosPer100g ?? {'carbs': 30, 'protein': 10, 'fat': 5};
-
-      // Create split food with same bounding box and mask
-      final splitFood = SegmentedFood(
-        id: '${originalFood.id}_${foodName}_${DateTime.now().millisecondsSinceEpoch}',
-        boundingBox: originalFood.boundingBox,
-        mask: originalFood.mask,
-        maskWidth: originalFood.maskWidth,
-        maskHeight: originalFood.maskHeight,
-        confidence: originalFood.confidence * percentage.toDouble(),
-        foodName: foodName,
-        segmentationSource: 'Split',
-        caloriesPer100g: splitCaloriesPer100g,
-        macrosPer100g: splitMacrosPer100g,
-        center: originalFood.center,
-        gramsAmount: splitGrams,
-      );
-
-      newFoods.add(splitFood);
-    });
-
     setState(() {
-      _segmentedFoods.removeAt(index);
-      _segmentedFoods.addAll(newFoods);
+      // Remove both foods and add merged one
+      _segmentedFoods.removeAt(math.max(index1, index2));
+      _segmentedFoods.removeAt(math.min(index1, index2));
+      _segmentedFoods.add(mergedFood);
     });
 
     _updateAnimations();
@@ -3280,9 +4214,15 @@ Widget _buildMacroCircle(
   /// Show merge dialog
   void _showMergeDialog() {
     if (_segmentedFoods.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You need at least 2 foods to merge')),
-      );
+      if (mounted) {
+        try {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('You need at least 2 foods to merge')),
+          );
+        } catch (e) {
+          print('Error showing snackbar: $e');
+        }
+      }
       return;
     }
 
@@ -3318,340 +4258,237 @@ Widget _buildMacroCircle(
     );
   }
 
- void _showMergeSelectionDialog(int firstIndex) {
-  final firstName = _segmentedFoods[firstIndex].foodName ?? 'Food';
-  
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text('Merge with $firstName'),  // ✅ Show first food name
-      content: SizedBox(
-        width: double.maxFinite,
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: _segmentedFoods.length,
-          itemBuilder: (context, index) {
-            if (index == firstIndex) return const SizedBox.shrink();
-            final food = _segmentedFoods[index];
-            final secondName = food.foodName ?? 'Food ${index + 1}';
-            
-            // ✅ Show preview of merged name
-            final previewName = firstName.toLowerCase().trim() == 
-                                secondName.toLowerCase().trim()
-                ? firstName  // Same food
-                : '$firstName with $secondName';  // Different foods
-            
-            return ListTile(
-              title: Text(food.foodName ?? 'Food ${index + 1}'),
-              subtitle: Text('Will become: $previewName'), 
-              onTap: () {
-                Navigator.pop(context);
-                mergeFoods(firstIndex, index);
-              },
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-      ],
-    ),
-  );
-}
-
-  /// Show split dialog
-  void _showSplitDialog(int index) {
-    final food = _segmentedFoods[index];
-    final componentsController = <String, TextEditingController>{};
+  void _showMergeSelectionDialog(int firstIndex) {
+    final firstName = _segmentedFoods[firstIndex].foodName ?? 'Food';
 
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('Split Food'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Split "${food.foodName ?? 'Food'}" into components.\nEnter percentages (must sum to 100%):',
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                    const SizedBox(height: 16),
-                    ...componentsController.entries.map((entry) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: entry.value,
-                                decoration: InputDecoration(
-                                  labelText: entry.key,
-                                  hintText: '0-100%',
-                                  border: const OutlineInputBorder(),
-                                ),
-                                keyboardType: TextInputType.number,
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete),
-                              onPressed: () {
-                                setDialogState(() {
-                                  componentsController.remove(entry.key);
-                                });
-                              },
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        final controller = TextEditingController();
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Add Component'),
-                            content: TextField(
-                              controller: controller,
-                              decoration: const InputDecoration(
-                                labelText: 'Food Name',
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                              ElevatedButton(
-                                onPressed: () {
-                                  if (controller.text.isNotEmpty) {
-                                    setDialogState(() {
-                                      componentsController[controller.text] =
-                                          TextEditingController();
-                                    });
-                                    Navigator.pop(context);
-                                  }
-                                },
-                                child: const Text('Add'),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Component'),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    final components = <String, double>{};
+      builder: (context) => AlertDialog(
+        title: Text('Merge with $firstName'), // ✅ Show first food name
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _segmentedFoods.length,
+            itemBuilder: (context, index) {
+              if (index == firstIndex) return const SizedBox.shrink();
+              final food = _segmentedFoods[index];
+              final secondName = food.foodName ?? 'Food ${index + 1}';
 
-                    for (final entry in componentsController.entries) {
-                      final value = double.tryParse(entry.value.text) ?? 0.0;
-                      if (value > 0) {
-                        components[entry.key] =
-                            value / 100.0; // Convert to decimal
-                      }
-                    }
+              // ✅ Show preview of merged name
+              final previewName =
+                  firstName.toLowerCase().trim() ==
+                      secondName.toLowerCase().trim()
+                  ? firstName // Same food
+                  : '$firstName with $secondName'; // Different foods
 
-                    if (components.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Please add at least one component'),
-                        ),
-                      );
-                      return;
-                    }
-
-                    Navigator.pop(context);
-                    splitFood(index, components);
-                  },
-                  child: const Text('Split'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+              return ListTile(
+                title: Text(food.foodName ?? 'Food ${index + 1}'),
+                subtitle: Text('Will become: $previewName'),
+                onTap: () {
+                  Navigator.pop(context);
+                  mergeFoods(firstIndex, index);
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
     );
   }
 
   /// Save the meal to Firestore
   /// Save the entire meal as ONE document with all foods in an array
-Future<void> _saveMealToFirestore() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('User not logged in!')),
-    );
-    return;
-  }
-
-  // Show loading indicator
-  setState(() => _isProcessing = true);
-
-  try {
-    final now = DateTime.now();
-    final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-    final weekdayStr = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-    ][now.weekday - 1];
-
-    // Generate unique meal ID (timestamp-based)
-    final mealId = DateTime.now().millisecondsSinceEpoch.toString();
-
-    // Step 1: Upload original image to Firebase Storage
-    String? originalImageDownloadUrl;
-
-    if (_imageFile != null) {
-      print('Uploading meal image to Storage...');
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('users/${user.uid}/meal_images/${mealId}_original.jpg');
-      
-      final uploadTask = await storageRef.putFile(_imageFile!);
-      originalImageDownloadUrl = await uploadTask.ref.getDownloadURL();
-      print('✓ Image uploaded: $originalImageDownloadUrl');
+  Future<void> _saveMealToFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        try {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('User not logged in!')));
+        } catch (e) {
+          print('Error showing snackbar: $e');
+        }
+      }
+      return;
     }
 
-    // Step 2: Prepare ALL food items data (from the single meal)
-    final List<Map<String, dynamic>> foodItemsData = [];
-    
-    for (final food in _segmentedFoods) {
-      foodItemsData.add({
-        'id': food.id,
-        'foodName': food.foodName ?? 'Unknown',
-        'gramsAmount': food.gramsAmount,
-        'calories': food.actualCalories,
-        'carbs': food.actualMacros['carbs'],
-        'protein': food.actualMacros['protein'],
-        'fat': food.actualMacros['fat'],
-        'caloriesPer100g': food.caloriesPer100g,
-        'macrosPer100g': food.macrosPer100g,
-        'confidence': food.confidence,
-        'segmentationSource': food.segmentationSource,
-        'classificationSource': food.classificationSource,
-        'boundingBox': {
-          'left': food.boundingBox.left,
-          'top': food.boundingBox.top,
-          'width': food.boundingBox.width,
-          'height': food.boundingBox.height,
-        },
-      });
-    }
+    // Show loading indicator
+    if (!mounted) return;
+    setState(() => _isProcessing = true);
 
-    // Step 3: Calculate totals for this meal
-    final totalCalories = _calculateTotalCalories();
-    final totalMacros = _calculateTotalMacros();
+    try {
+      final now = DateTime.now();
+      final dateStr =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final timeStr =
+          "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+      final weekdayStr = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ][now.weekday - 1];
 
+      // Generate unique meal ID (timestamp-based)
+      final mealId = DateTime.now().millisecondsSinceEpoch.toString();
 
-    // Step 4: Save ONE document to "meals" subcollection
-    print('Saving meal document with ${_segmentedFoods.length} food items...');
-    
-    await _firestore
-        .collection('users')
-        .doc(user.uid)
-        .collection('meals')
-        .doc(mealId)  // Single document for the entire meal
-        .set({
-      // Meal metadata
-      'mealType': widget.mealType,
-      'date': dateStr,
-      'time': timeStr,
-      'weekday': weekdayStr,
-      'createdAt': FieldValue.serverTimestamp(),
-      
-      // Image reference
-      'originalImageUrl': originalImageDownloadUrl,
-      
-      // Totals for this meal
-      'totalCalories': totalCalories,
-      'totalCarbs': totalMacros['carbs'],
-      'totalProtein': totalMacros['protein'],
-      'totalFat': totalMacros['fat'],
-      
-      // ALL food items in one array
-      'foodItems': foodItemsData,
-      
-      // Metadata
-      'numFoodsDetected': _segmentedFoods.length,
-      'detectionMetadata': {
-        'modelVersion': '1.0',
-        'processingTime': 0, // You can track this if needed
-      },
-    });
+      // Step 1: Upload original image to Firebase Storage
+      String? originalImageDownloadUrl;
 
-    print('✓ Meal saved successfully!');
+      if (_imageFile != null) {
+        print('Uploading meal image to Storage...');
+        final storageRef = FirebaseStorage.instance.ref().child(
+          'users/${user.uid}/meal_images/${mealId}_original.jpg',
+        );
 
-    // Show success message
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-        content: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.check_circle, color: Colors.white),
-          const SizedBox(width: 12),
-          Text(
-          'Meal saved: ${_segmentedFoods.length} food${_segmentedFoods.length > 1 ? "s" : ""}!',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
-          ),
-        ],
-        ),
-        duration: const Duration(seconds: 2),
-        shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        ),
-        margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      ),
+        final uploadTask = await storageRef.putFile(_imageFile!);
+        originalImageDownloadUrl = await uploadTask.ref.getDownloadURL();
+        print('✓ Image uploaded: $originalImageDownloadUrl');
+      }
+
+      // Step 2: Prepare ALL food items data (from the single meal)
+      final List<Map<String, dynamic>> foodItemsData = [];
+
+      for (final food in _segmentedFoods) {
+        foodItemsData.add({
+          'id': food.id,
+          'foodName': food.foodName ?? 'Unknown',
+          'gramsAmount': food.gramsAmount,
+          'calories': food.actualCalories,
+          'carbs': food.actualMacros['carbs'],
+          'protein': food.actualMacros['protein'],
+          'fat': food.actualMacros['fat'],
+          'caloriesPer100g': food.caloriesPer100g,
+          'macrosPer100g': food.macrosPer100g,
+          'confidence': food.confidence,
+          'segmentationSource': food.segmentationSource,
+          'classificationSource': food.classificationSource,
+          'boundingBox': {
+            'left': food.boundingBox.left,
+            'top': food.boundingBox.top,
+            'width': food.boundingBox.width,
+            'height': food.boundingBox.height,
+          },
+        });
+      }
+
+      // Step 3: Calculate totals for this meal
+      final totalCalories = _calculateTotalCalories();
+      final totalMacros = _calculateTotalMacros();
+
+      // Step 4: Save ONE document to "meals" subcollection
+      print(
+        'Saving meal document with ${_segmentedFoods.length} food items...',
       );
 
-      // Navigate back and trigger refresh
-      await Future.delayed(const Duration(seconds: 2));
-      
-      // Pop back to home with success flag
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      // Alternative: Navigator.of(context).pop(true); if you have direct navigation
-    }
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('meals')
+          .doc(mealId) // Single document for the entire meal
+          .set({
+            // Meal metadata
+            'mealType': widget.mealType,
+            'date': dateStr,
+            'time': timeStr,
+            'weekday': weekdayStr,
+            'createdAt': FieldValue.serverTimestamp(),
 
-  } catch (e) {
-    print('Error saving meal: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to save meal: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  } finally {
-    if (mounted) {
-      setState(() => _isProcessing = false);
+            // Image reference
+            'originalImageUrl': originalImageDownloadUrl,
+
+            // Totals for this meal
+            'totalCalories': totalCalories,
+            'totalCarbs': totalMacros['carbs'],
+            'totalProtein': totalMacros['protein'],
+            'totalFat': totalMacros['fat'],
+
+            // ALL food items in one array
+            'foodItems': foodItemsData,
+
+            // Metadata
+            'numFoodsDetected': _segmentedFoods.length,
+            'detectionMetadata': {
+              'modelVersion': '1.0',
+              'processingTime': 0, // You can track this if needed
+            },
+          });
+
+      print('✓ Meal saved successfully!');
+
+      // Show success message
+      if (mounted) {
+        try {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+              content: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.check_circle, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Meal saved: ${_segmentedFoods.length} food${_segmentedFoods.length > 1 ? "s" : ""}!',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ],
+              ),
+              duration: const Duration(seconds: 2),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+          );
+        } catch (e) {
+          print('Error showing success snackbar: $e');
+        }
+
+        // Navigate back and trigger refresh
+        await Future.delayed(const Duration(seconds: 2));
+
+        if (mounted) {
+          // Return true to indicate meal was saved successfully
+          // This will trigger refresh in the home page
+          Navigator.of(context).pop(true);
+        }
+      }
+    } catch (e) {
+      print('Error saving meal: $e');
+      if (mounted) {
+        try {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to save meal: ${e.toString()}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } catch (snackbarError) {
+          print('Error showing error snackbar: $snackbarError');
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
-}
 
   // Continue to batch 8...
 }
@@ -3703,28 +4540,54 @@ class _EditFoodPageState extends State<EditFoodPage> {
     'Buffet plate 21cm~',
   ];
 
-  // Generate suggestions from predictions with >70% confidence
+  // IMPROVED: Generate more diverse suggestions (10+ options) with lower confidence threshold
   List<String> get foodSuggestions {
     final Set<String> suggestions = {};
+    final int maxSuggestions = kMaxFoodSuggestions;
+    final double minConfidenceThreshold = kMinSuggestionConfidence;
 
-    if (widget.food.confidence > 0.3 &&
-        widget.food.foodName != null &&
-        widget.food.foodName!.isNotEmpty) {
+    // 1. Always include current food name if available
+    if (widget.food.foodName != null &&
+        widget.food.foodName!.isNotEmpty &&
+        widget.food.foodName != 'Unknown') {
       suggestions.add(widget.food.foodName!);
     }
 
+    // 2. Add predictions above confidence threshold (prioritize higher confidence)
+    final highConfidencePredictions = <FoodPrediction>[];
+    final mediumConfidencePredictions = <FoodPrediction>[];
+
     for (final pred in widget.allPredictions) {
-      if (pred.confidence > 0.3) {
-        suggestions.add(pred.foodName);
+      if (pred.confidence >= 0.5) {
+        highConfidencePredictions.add(pred);
+      } else if (pred.confidence >= minConfidenceThreshold) {
+        mediumConfidencePredictions.add(pred);
       }
     }
 
-    if (suggestions.isEmpty) {
-      for (int i = 0; i < widget.allPredictions.length && i < 5; i++) {
-        suggestions.add(widget.allPredictions[i].foodName);
+    // Add high confidence first
+    for (final pred in highConfidencePredictions) {
+      if (suggestions.length >= maxSuggestions) break;
+      suggestions.add(pred.foodName);
+    }
+
+    // Then add medium confidence
+    for (final pred in mediumConfidencePredictions) {
+      if (suggestions.length >= maxSuggestions) break;
+      suggestions.add(pred.foodName);
+    }
+
+    // 3. If still not enough, add top predictions regardless of threshold
+    if (suggestions.length < maxSuggestions) {
+      for (final pred in widget.allPredictions) {
+        if (suggestions.length >= maxSuggestions) break;
+        if (!suggestions.contains(pred.foodName)) {
+          suggestions.add(pred.foodName);
+        }
       }
     }
 
+    // 4. Final fallback
     if (suggestions.isEmpty) {
       if (widget.food.foodName != null && widget.food.foodName!.isNotEmpty) {
         suggestions.add(widget.food.foodName!);
@@ -3980,7 +4843,7 @@ class _EditFoodPageState extends State<EditFoodPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Top predictions with >70% confidence',
+            '${foodSuggestions.length} suggestions (sorted by confidence)',
             style: TextStyle(fontSize: 12, color: Colors.grey[600]),
           ),
           const SizedBox(height: 12),
@@ -4807,7 +5670,8 @@ class AnimatedSemiCircleProgressPainter extends CustomPainter {
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       math.pi,
-      math.pi * displayProgress, // ✅ This now correctly represents the actual progress
+      math.pi *
+          displayProgress, // ✅ This now correctly represents the actual progress
       false,
       progressPaint,
     );
@@ -4848,6 +5712,15 @@ class DetectionOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Validate inputs
+    if (foods.isEmpty ||
+        originalWidth <= 0 ||
+        originalHeight <= 0 ||
+        renderedWidth <= 0 ||
+        renderedHeight <= 0) {
+      return; // Don't draw if invalid
+    }
+
     final colors = [
       Colors.green,
       Colors.blue,
@@ -4859,9 +5732,20 @@ class DetectionOverlayPainter extends CustomPainter {
     for (int i = 0; i < foods.length && i < 5; i++) {
       final food = foods[i];
 
+      // Validate food data
+      if (food.maskWidth <= 0 ||
+          food.maskHeight <= 0 ||
+          food.boundingBox.width <= 0 ||
+          food.boundingBox.height <= 0) {
+        continue; // Skip invalid food
+      }
+
       // Scale from segmentation coordinates to original image coordinates
       final segWidth = food.maskWidth.toDouble();
       final segHeight = food.maskHeight.toDouble();
+
+      // Validate to prevent division by zero
+      if (segWidth <= 0 || segHeight <= 0) continue;
 
       final originalX = (food.boundingBox.left / segWidth) * originalWidth;
       final originalY = (food.boundingBox.top / segHeight) * originalHeight;
@@ -4869,6 +5753,9 @@ class DetectionOverlayPainter extends CustomPainter {
           (food.boundingBox.width / segWidth) * originalWidth;
       final originalHeightScaled =
           (food.boundingBox.height / segHeight) * originalHeight;
+
+      // Validate scaled dimensions
+      if (originalWidthScaled <= 0 || originalHeightScaled <= 0) continue;
 
       // Scale from original to rendered coordinates
       final renderedX = (originalX / originalWidth) * renderedWidth + offsetX;
@@ -4878,39 +5765,68 @@ class DetectionOverlayPainter extends CustomPainter {
       final renderedHeightScaled =
           (originalHeightScaled / originalHeight) * renderedHeight;
 
-      // Draw bounding box
-      final paint = Paint()
-        ..color = colors[i % colors.length].withAlpha((0.6 * 255).toInt())
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.0;
-
-      canvas.drawRect(
-        Rect.fromLTWH(
-          renderedX,
-          renderedY,
-          renderedWidthScaled,
-          renderedHeightScaled,
-        ),
-        paint,
+      // Clamp coordinates to visible area
+      final clampedX = renderedX.clamp(-renderedWidthScaled, size.width);
+      final clampedY = renderedY.clamp(-renderedHeightScaled, size.height);
+      final clampedWidth = math.min(
+        renderedWidthScaled,
+        size.width - clampedX + renderedWidthScaled,
+      );
+      final clampedHeight = math.min(
+        renderedHeightScaled,
+        size.height - clampedY + renderedHeightScaled,
       );
 
-      // Draw label
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: food.foodName ?? 'Food ${i + 1}',
-          style: TextStyle(
-            color: colors[i % colors.length],
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            shadows: [
-              Shadow(color: Colors.black.withAlpha((0.8 * 255).toInt()), blurRadius: 4),
-            ],
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      textPainter.paint(canvas, Offset(renderedX + 8, renderedY + 8));
+      // Only draw if at least partially visible
+      if (clampedX < size.width &&
+          clampedY < size.height &&
+          clampedX + clampedWidth > 0 &&
+          clampedY + clampedHeight > 0) {
+        // Draw bounding box
+        final paint = Paint()
+          ..color = colors[i % colors.length].withAlpha((0.6 * 255).toInt())
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.0;
+
+        canvas.drawRect(
+          Rect.fromLTWH(clampedX, clampedY, clampedWidth, clampedHeight),
+          paint,
+        );
+
+        // Draw label only if it fits in visible area
+        final labelX = clampedX + 8;
+        final labelY = clampedY + 8;
+        if (labelX >= 0 &&
+            labelY >= 0 &&
+            labelX < size.width &&
+            labelY < size.height) {
+          final textPainter = TextPainter(
+            text: TextSpan(
+              text: food.foodName ?? 'Food ${i + 1}',
+              style: TextStyle(
+                color: colors[i % colors.length],
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                shadows: [
+                  Shadow(
+                    color: Colors.black.withAlpha((0.8 * 255).toInt()),
+                    blurRadius: 4,
+                  ),
+                ],
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          );
+          textPainter.layout();
+          // Clamp label position to visible area
+          final labelPaintX = labelX.clamp(0.0, size.width - textPainter.width);
+          final labelPaintY = labelY.clamp(
+            0.0,
+            size.height - textPainter.height,
+          );
+          textPainter.paint(canvas, Offset(labelPaintX, labelPaintY));
+        }
+      }
     }
   }
 

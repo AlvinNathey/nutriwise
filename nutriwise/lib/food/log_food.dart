@@ -162,9 +162,9 @@ class _LogFoodModalState extends State<LogFoodModal> {
         imageQuality: 85,
       );
       if (image != null) {
-        Navigator.of(context).pop(); // Close the input options sheet/modal
+        // Don't close modal yet - let FoodRecognitionPage handle it
         if (!mounted) return;
-        Navigator.push(
+        final result = await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => FoodRecognitionPage(
@@ -173,6 +173,10 @@ class _LogFoodModalState extends State<LogFoodModal> {
             ),
           ),
         );
+        // Close modal and return result to trigger refresh in home page
+        if (mounted) {
+          Navigator.of(context).pop(result == true ? true : null);
+        }
       }
     } catch (e) {
       _showErrorSnackBar('Failed to access gallery: ${e.toString()}');
@@ -180,7 +184,6 @@ class _LogFoodModalState extends State<LogFoodModal> {
   }
 
   Future<void> _handleCameraTap() async {
-    Navigator.of(context).pop(); // Close the input options sheet
     try {
       final PermissionStatus permission = await Permission.camera.status;
       if (permission.isDenied) {
@@ -204,8 +207,9 @@ class _LogFoodModalState extends State<LogFoodModal> {
         imageQuality: 85,
       );
       if (image != null) {
-        // Navigator.pop(context); // Close the modal
-        Navigator.push(
+        // Don't close modal yet - let FoodRecognitionPage handle it
+        if (!mounted) return;
+        final result = await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => FoodRecognitionPage(
@@ -214,6 +218,10 @@ class _LogFoodModalState extends State<LogFoodModal> {
             ),
           ),
         );
+        // Close modal and return result to trigger refresh in home page
+        if (mounted) {
+          Navigator.of(context).pop(result == true ? true : null);
+        }
       }
     } catch (e) {
       _showErrorSnackBar('Failed to access camera: ${e.toString()}');

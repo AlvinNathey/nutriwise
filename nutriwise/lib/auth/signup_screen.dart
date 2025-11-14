@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:nutriwise/auth/goal_setup_screen.dart';
 import 'package:nutriwise/auth/plan_setup.dart';
 import 'package:nutriwise/services/auth_services.dart';
-import 'package:nutriwise/auth/auth_wrapper.dart';
-import 'package:local_auth/local_auth.dart';
+import 'package:nutriwise/auth/email_verification_screen.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({Key? key}) : super(key: key);
@@ -195,37 +194,10 @@ class _SignupScreenState extends State<SignupScreen> {
           return;
         }
 
-        // Biometric authentication after registration
-        final LocalAuthentication auth = LocalAuthentication();
-        bool isSupported = await auth.isDeviceSupported();
-        final biometrics = await auth.getAvailableBiometrics();
-        bool didAuthenticate = false;
-        if (isSupported && biometrics.isNotEmpty) {
-          try {
-            didAuthenticate = await auth.authenticate(
-              localizedReason: 'Please use fingerprint or Face ID to complete signup.',
-              options: const AuthenticationOptions(biometricOnly: true),
-            );
-          } catch (e) {
-            print('[DEBUG] Biometric authentication error: $e');
-          }
-        }
-        if (!didAuthenticate) {
-          _showErrorSnackBar('Biometric authentication required. Please use fingerprint or Face ID.');
-          await _authService.signOut();
-          setState(() {
-            _isLoading = false;
-          });
-          return;
-        }
-
-        // Send email verification
-        await user.sendEmailVerification();
-
         // Calculate final BMR
         _dailyCalories = _calculateBMR().round();
 
-        // Store height and weight in both user units and metric for consistency
+        // Prepare user data to pass to verification screen
         final double heightToStore = _isMetric
             ? double.parse((_height * 30.48).toStringAsFixed(2)) // cm
             : double.parse(_height.toStringAsFixed(2)); // feet (e.g., 5.7)
@@ -233,7 +205,7 @@ class _SignupScreenState extends State<SignupScreen> {
         final double heightMetric = _getHeightCm();
         final double weightMetric = _getWeightKg();
 
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        final userData = {
           'name': _userName,
           'email': _emailController.text.trim(),
           'gender': _userGender,
@@ -243,49 +215,62 @@ class _SignupScreenState extends State<SignupScreen> {
           'exerciseFrequency': _exerciseFrequency,
           'cardioLevel': _cardioLevel,
           'dailyCalories': _dailyCalories,
-          'createdAt': FieldValue.serverTimestamp(),
-          'profileComplete': true,
           'isMetric': _isMetric,
           'isWeightMetric': _isWeightMetric,
-          // Store metric for calculations
           'heightMetric': heightMetric,
           'weightMetric': weightMetric,
+        };
+
+        // Reset loading state before navigation
+        setState(() {
+          _isLoading = false;
         });
 
-        // --- Save initial weight entry for trend ---
-        await _authService.saveWeightEntry(
-          user.uid,
-          weightToStore,
-          isMetric: _isWeightMetric,
-        );
-
-        // Show verification message
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => AlertDialog(
-            title: const Text('Verify Your Email'),
-            content: const Text(
-              'To proceed, please verify your account by clicking the link sent to your email address.\n\nCheck your inbox and spam folder. Once verified, click OK to continue.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (context) => const AuthWrapper(),
-                    ),
-                    (route) => false,
-                  );
-                },
-                child: const Text('OK'),
+        // Navigate FIRST to prevent AuthWrapper from interfering
+        // Then send email verification in the background
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => EmailVerificationScreen(
+                user: user,
+                userData: userData,
               ),
-            ],
-          ),
-        );
+            ),
+            (route) => false, // Remove all previous routes
+          );
+        }
+
+        // Send email verification AFTER navigation to ensure it doesn't block
+        // This happens in the background while EmailVerificationScreen is shown
+        Future.microtask(() async {
+          try {
+            // Small delay to ensure user is fully created in Firebase
+            await Future.delayed(const Duration(milliseconds: 300));
+            
+            // Reload user to get the latest state
+            await user.reload();
+            final currentUser = FirebaseAuth.instance.currentUser;
+            
+            // Use currentUser if available, otherwise use the original user object
+            final userToUse = currentUser ?? user;
+            
+            // Send email verification
+            await userToUse.sendEmailVerification();
+            print('[DEBUG] Email verification sent successfully to ${userToUse.email}');
+          } catch (e) {
+            print('[DEBUG] Error sending email verification: $e');
+            // Try one more time with the original user object as fallback
+            try {
+              await user.sendEmailVerification();
+              print('[DEBUG] Email verification sent successfully (fallback method)');
+            } catch (e2) {
+              print('[DEBUG] Error sending email verification (fallback): $e2');
+              // User can resend from verification screen if needed
+            }
+          }
+        });
       } catch (e) {
         _showErrorSnackBar(e.toString());
-      } finally {
         setState(() {
           _isLoading = false;
         });

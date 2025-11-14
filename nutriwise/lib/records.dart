@@ -24,7 +24,8 @@ class RecordsPage extends StatefulWidget {
   State<RecordsPage> createState() => _RecordsPageState();
 }
 
-class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStateMixin {
+class _RecordsPageState extends State<RecordsPage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   DateTime _selectedMonth = DateTime.now();
   int _selectedTab = 0;
@@ -66,7 +67,10 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
     if (user == null) return;
 
     // Fetch account creation date
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
     final createdAt = userDoc.data()?['createdAt'];
     if (createdAt != null && createdAt is Timestamp) {
       setState(() {
@@ -105,7 +109,10 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
         .get();
 
@@ -138,7 +145,10 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         .collection('users')
         .doc(user.uid)
         .collection('meals')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
         .get();
 
@@ -200,15 +210,13 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
   bool _isBeforeAccountCreated() {
     if (_accountCreated == null) return false;
     return _selectedMonth.year < _accountCreated!.year ||
-        (_selectedMonth.year == _accountCreated!.year && _selectedMonth.month < _accountCreated!.month);
+        (_selectedMonth.year == _accountCreated!.year &&
+            _selectedMonth.month < _accountCreated!.month);
   }
 
   // New method to show download dialog
   void _showDownloadDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => DownloadReportDialog(),
-    );
+    showDialog(context: context, builder: (ctx) => DownloadReportDialog());
   }
 
   @override
@@ -245,9 +253,7 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         children: [
           Container(
             decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: Colors.green, width: 1),
-              ),
+              border: Border(bottom: BorderSide(color: Colors.green, width: 1)),
             ),
             child: TabBar(
               controller: _tabController,
@@ -268,10 +274,7 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
           Expanded(
             child: TabBarView(
               controller: _tabController,
-              children: [
-                _buildRecordView(),
-                const NutrientsPage(),
-              ],
+              children: [_buildRecordView(), const NutrientsPage()],
             ),
           ),
         ],
@@ -280,7 +283,8 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
   }
 
   Widget _buildRecordView() {
-    final hasData = _calorieData.isNotEmpty || _mealTypeCounts.values.any((v) => v > 0);
+    final hasData =
+        _calorieData.isNotEmpty || _mealTypeCounts.values.any((v) => v > 0);
 
     return Column(
       children: [
@@ -297,10 +301,7 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
             const SizedBox(width: 20),
             Text(
               '${_selectedMonth.year}.${_selectedMonth.month.toString().padLeft(2, '0')}',
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(width: 20),
             IconButton(
@@ -318,10 +319,26 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildMealCounter('Breakfast', _mealTypeCounts['Breakfast'] ?? 0, Colors.orange),
-              _buildMealCounter('Lunch', _mealTypeCounts['Lunch'] ?? 0, Colors.teal),
-              _buildMealCounter('Dinner', _mealTypeCounts['Dinner'] ?? 0, Colors.purple),
-              _buildMealCounter('Snack', _mealTypeCounts['Snack'] ?? 0, Colors.blue),
+              _buildMealCounter(
+                'Breakfast',
+                _mealTypeCounts['Breakfast'] ?? 0,
+                Colors.orange,
+              ),
+              _buildMealCounter(
+                'Lunch',
+                _mealTypeCounts['Lunch'] ?? 0,
+                Colors.teal,
+              ),
+              _buildMealCounter(
+                'Dinner',
+                _mealTypeCounts['Dinner'] ?? 0,
+                Colors.purple,
+              ),
+              _buildMealCounter(
+                'Snack',
+                _mealTypeCounts['Snack'] ?? 0,
+                Colors.blue,
+              ),
             ],
           ),
         if (hasData) const SizedBox(height: 30),
@@ -373,10 +390,7 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         const SizedBox(height: 8),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 14,
-            color: Colors.black87,
-          ),
+          style: const TextStyle(fontSize: 14, color: Colors.black87),
         ),
       ],
     );
@@ -384,8 +398,16 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
 
   Widget _buildCalendarWithCalories(Map<int, int> calorieData) {
     final now = DateTime.now();
-    final firstDayOfMonth = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
-    final lastDayOfMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
+    final firstDayOfMonth = DateTime(
+      _selectedMonth.year,
+      _selectedMonth.month,
+      1,
+    );
+    final lastDayOfMonth = DateTime(
+      _selectedMonth.year,
+      _selectedMonth.month + 1,
+      0,
+    );
     final daysInMonth = lastDayOfMonth.day;
     final firstWeekday = firstDayOfMonth.weekday % 7; // 0 = Sunday
 
@@ -396,7 +418,9 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
         children: [
           // Weekday headers
           Row(
-            children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) {
+            children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((
+              day,
+            ) {
               final isSunday = day == 'Sun';
               final isSaturday = day == 'Sat';
               return Expanded(
@@ -404,7 +428,9 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                   child: Text(
                     day,
                     style: TextStyle(
-                      color: isSunday ? Colors.red : (isSaturday ? Colors.green : Colors.green[800]),
+                      color: isSunday
+                          ? Colors.red
+                          : (isSaturday ? Colors.green : Colors.green[800]),
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
@@ -424,12 +450,18 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
               itemCount: 42, // 6 weeks max
               itemBuilder: (context, index) {
                 final dayNumber = index - firstWeekday + 1;
-                final isCurrentMonth = dayNumber > 0 && dayNumber <= daysInMonth;
-                final date = DateTime(_selectedMonth.year, _selectedMonth.month, dayNumber);
+                final isCurrentMonth =
+                    dayNumber > 0 && dayNumber <= daysInMonth;
+                final date = DateTime(
+                  _selectedMonth.year,
+                  _selectedMonth.month,
+                  dayNumber,
+                );
                 final isFuture = date.isAfter(now);
-                final isToday = date.year == now.year &&
-                               date.month == now.month &&
-                               date.day == now.day;
+                final isToday =
+                    date.year == now.year &&
+                    date.month == now.month &&
+                    date.day == now.day;
                 final isSunday = index % 7 == 0;
                 final isSaturday = index % 7 == 6;
 
@@ -444,7 +476,9 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                   margin: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    border: isToday ? Border.all(color: Colors.blue, width: 2) : null,
+                    border: isToday
+                        ? Border.all(color: Colors.blue, width: 2)
+                        : null,
                   ),
                   child: Stack(
                     children: [
@@ -457,7 +491,11 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                             fontSize: 14,
                             color: isFuture
                                 ? Colors.grey[300]
-                                : (isSunday ? Colors.red : (isSaturday ? Colors.green : Colors.black)),
+                                : (isSunday
+                                      ? Colors.red
+                                      : (isSaturday
+                                            ? Colors.green
+                                            : Colors.black)),
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -475,9 +513,13 @@ class _RecordsPageState extends State<RecordsPage> with SingleTickerProviderStat
                               (i) => Container(
                                 width: 8,
                                 height: 8,
-                                margin: const EdgeInsets.symmetric(horizontal: 1),
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 1,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: mealTypeColors[mealTypes[i]] ?? Colors.grey,
+                                  color:
+                                      mealTypeColors[mealTypes[i]] ??
+                                      Colors.grey,
                                   shape: BoxShape.circle,
                                 ),
                               ),
@@ -533,36 +575,24 @@ class _DownloadReportDialogState extends State<DownloadReportDialog> {
                 const SizedBox(width: 12),
                 const Text(
                   'Download Report',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
             const SizedBox(height: 24),
             const Text(
               'Select Period Type:',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
             // Period Type Selection
             Row(
               children: [
-                Expanded(
-                  child: _buildPeriodTypeChip('Month'),
-                ),
+                Expanded(child: _buildPeriodTypeChip('Month')),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: _buildPeriodTypeChip('Week'),
-                ),
+                Expanded(child: _buildPeriodTypeChip('Week')),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: _buildPeriodTypeChip('Custom'),
-                ),
+                Expanded(child: _buildPeriodTypeChip('Custom')),
               ],
             ),
             const SizedBox(height: 24),
@@ -650,7 +680,8 @@ class _DownloadReportDialogState extends State<DownloadReportDialog> {
                 max: 12,
                 divisions: 11,
                 activeColor: Colors.green,
-                label: '$_selectedMonths month${_selectedMonths > 1 ? 's' : ''}',
+                label:
+                    '$_selectedMonths month${_selectedMonths > 1 ? 's' : ''}',
                 onChanged: (value) {
                   setState(() {
                     _selectedMonths = value.toInt();
@@ -885,7 +916,11 @@ class _DownloadReportDialogState extends State<DownloadReportDialog> {
     DateTime endDate = DateTime.now();
 
     if (_selectedPeriodType == 'Month') {
-      startDate = DateTime(endDate.year, endDate.month - _selectedMonths + 1, 1);
+      startDate = DateTime(
+        endDate.year,
+        endDate.month - _selectedMonths + 1,
+        1,
+      );
     } else if (_selectedPeriodType == 'Week') {
       startDate = endDate.subtract(Duration(days: (_selectedWeeks * 7) - 1));
     } else {
@@ -894,7 +929,7 @@ class _DownloadReportDialogState extends State<DownloadReportDialog> {
     }
 
     Navigator.of(context).pop();
-    
+
     // Navigate to preview page
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -957,8 +992,14 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .collection('users')
           .doc(user.uid)
           .collection('barcodes')
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate))
-          .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate))
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate),
+          )
+          .where(
+            'createdAt',
+            isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate),
+          )
           .get();
 
       // --- Fetch meals from meals ---
@@ -966,8 +1007,14 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .collection('users')
           .doc(user.uid)
           .collection('meals')
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate))
-          .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate))
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate),
+          )
+          .where(
+            'createdAt',
+            isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate),
+          )
           .get();
 
       // --- Fetch weight entries (unchanged) ---
@@ -975,8 +1022,14 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           .collection('users')
           .doc(user.uid)
           .collection('weight_entries')
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate))
-          .where('timestamp', isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate))
+          .where(
+            'timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate),
+          )
+          .where(
+            'timestamp',
+            isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate),
+          )
           .orderBy('timestamp', descending: false)
           .get();
 
@@ -1001,7 +1054,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         final data = doc.data();
         // Show all food names comma separated
         String foodNames = '';
-        if (data['foodItems'] is List && (data['foodItems'] as List).isNotEmpty) {
+        if (data['foodItems'] is List &&
+            (data['foodItems'] as List).isNotEmpty) {
           foodNames = (data['foodItems'] as List)
               .map((f) => (f['foodName'] ?? '') as String)
               .where((n) => n.isNotEmpty)
@@ -1033,12 +1087,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         'totalProtein': 0.0,
         'totalCarbs': 0.0,
         'totalFat': 0.0,
-        'mealTypeCounts': {
-          'Breakfast': 0,
-          'Lunch': 0,
-          'Dinner': 0,
-          'Snack': 0,
-        },
+        'mealTypeCounts': {'Breakfast': 0, 'Lunch': 0, 'Dinner': 0, 'Snack': 0},
         'dailyCalories': <String, double>{},
         'weightEntries': <Map<String, dynamic>>[],
         'mealsDetails': <Map<String, dynamic>>[],
@@ -1063,9 +1112,12 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
         // Track daily calories
         if (meal['date'] is DateTime) {
-          final dateKey = DateFormat('yyyy-MM-dd').format(meal['date'] as DateTime);
+          final dateKey = DateFormat(
+            'yyyy-MM-dd',
+          ).format(meal['date'] as DateTime);
           reportData['dailyCalories'][dateKey] =
-              (reportData['dailyCalories'][dateKey] ?? 0.0) + (meal['calories'] ?? 0).toDouble();
+              (reportData['dailyCalories'][dateKey] ?? 0.0) +
+              (meal['calories'] ?? 0).toDouble();
         }
 
         // Store meal details
@@ -1121,7 +1173,11 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         ),
         title: const Text(
           'Report Preview',
-          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         centerTitle: true,
         actions: [
@@ -1232,10 +1288,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                       const SizedBox(height: 4),
                       Text(
                         _reportData['userName'] ?? 'User',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[700],
-                        ),
+                        style: TextStyle(fontSize: 16, color: Colors.grey[700]),
                       ),
                     ],
                   ),
@@ -1359,7 +1412,13 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     );
   }
 
-  Widget _buildSummaryCard(String title, String value, String unit, Color color, IconData icon) {
+  Widget _buildSummaryCard(
+    String title,
+    String value,
+    String unit,
+    Color color,
+    IconData icon,
+  ) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1376,10 +1435,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               Expanded(
                 child: Text(
                   title,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                 ),
               ),
             ],
@@ -1393,13 +1449,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               color: color,
             ),
           ),
-          Text(
-            unit,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-            ),
-          ),
+          Text(unit, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
         ],
       ),
     );
@@ -1440,7 +1490,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                                 PieChartSectionData(
                                   color: Colors.green,
                                   value: totalCarbs,
-                                  title: '${((totalCarbs / totalMacros) * 100).toStringAsFixed(0)}%',
+                                  title:
+                                      '${((totalCarbs / totalMacros) * 100).toStringAsFixed(0)}%',
                                   radius: 50,
                                   titleStyle: const TextStyle(
                                     fontSize: 12,
@@ -1451,7 +1502,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                                 PieChartSectionData(
                                   color: Colors.blue,
                                   value: totalProtein,
-                                  title: '${((totalProtein / totalMacros) * 100).toStringAsFixed(0)}%',
+                                  title:
+                                      '${((totalProtein / totalMacros) * 100).toStringAsFixed(0)}%',
                                   radius: 50,
                                   titleStyle: const TextStyle(
                                     fontSize: 12,
@@ -1462,7 +1514,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                                 PieChartSectionData(
                                   color: Colors.orange,
                                   value: totalFat,
-                                  title: '${((totalFat / totalMacros) * 100).toStringAsFixed(0)}%',
+                                  title:
+                                      '${((totalFat / totalMacros) * 100).toStringAsFixed(0)}%',
                                   radius: 50,
                                   titleStyle: const TextStyle(
                                     fontSize: 12,
@@ -1475,7 +1528,12 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                               sectionsSpace: 2,
                             ),
                           )
-                        : Center(child: Text('No data', style: TextStyle(color: Colors.grey[600]))),
+                        : Center(
+                            child: Text(
+                              'No data',
+                              style: TextStyle(color: Colors.grey[600]),
+                            ),
+                          ),
                   ),
                 ),
                 const SizedBox(width: 32),
@@ -1483,11 +1541,26 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   flex: 3,
                   child: Column(
                     children: [
-                      _buildMacroRow('Carbs', totalCarbs, _reportData['avgDailyCarbs'], Colors.green),
+                      _buildMacroRow(
+                        'Carbs',
+                        totalCarbs,
+                        _reportData['avgDailyCarbs'],
+                        Colors.green,
+                      ),
                       const SizedBox(height: 12),
-                      _buildMacroRow('Protein', totalProtein, _reportData['avgDailyProtein'], Colors.blue),
+                      _buildMacroRow(
+                        'Protein',
+                        totalProtein,
+                        _reportData['avgDailyProtein'],
+                        Colors.blue,
+                      ),
                       const SizedBox(height: 12),
-                      _buildMacroRow('Fat', totalFat, _reportData['avgDailyFat'], Colors.orange),
+                      _buildMacroRow(
+                        'Fat',
+                        totalFat,
+                        _reportData['avgDailyFat'],
+                        Colors.orange,
+                      ),
                     ],
                   ),
                 ),
@@ -1496,7 +1569,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-      );
+    );
   }
 
   Widget _buildMacroRow(String label, double total, double avg, Color color) {
@@ -1508,18 +1581,12 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
             Container(
               width: 12,
               height: 12,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 8),
             Text(
               label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -1538,7 +1605,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
   Widget _buildMealDistributionSection() {
     final mealCounts = _reportData['mealTypeCounts'] as Map<String, dynamic>;
-    final totalMeals = mealCounts.values.fold(0, (sum, count) => sum + (count as int));
+    final totalMeals = mealCounts.values.fold(
+      0,
+      (sum, count) => sum + (count as int),
+    );
 
     return Card(
       elevation: 2,
@@ -1623,41 +1693,63 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildMealTypeRow('Breakfast', mealCounts['Breakfast'] ?? 0, totalMeals, Colors.orange),
+                        _buildMealTypeRow(
+                          'Breakfast',
+                          mealCounts['Breakfast'] ?? 0,
+                          totalMeals,
+                          Colors.orange,
+                        ),
                         const SizedBox(height: 8),
-                        _buildMealTypeRow('Lunch', mealCounts['Lunch'] ?? 0, totalMeals, Colors.teal),
+                        _buildMealTypeRow(
+                          'Lunch',
+                          mealCounts['Lunch'] ?? 0,
+                          totalMeals,
+                          Colors.teal,
+                        ),
                         const SizedBox(height: 8),
-                        _buildMealTypeRow('Dinner', mealCounts['Dinner'] ?? 0, totalMeals, Colors.purple),
+                        _buildMealTypeRow(
+                          'Dinner',
+                          mealCounts['Dinner'] ?? 0,
+                          totalMeals,
+                          Colors.purple,
+                        ),
                         const SizedBox(height: 8),
-                        _buildMealTypeRow('Snack', mealCounts['Snack'] ?? 0, totalMeals, Colors.blue),
+                        _buildMealTypeRow(
+                          'Snack',
+                          mealCounts['Snack'] ?? 0,
+                          totalMeals,
+                          Colors.blue,
+                        ),
                       ],
                     ),
                   ),
                 ],
               ),
-             Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text('No meal data', style: TextStyle(color: Colors.grey[600])),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'No meal data',
+                  style: TextStyle(color: Colors.grey[600]),
                 ),
               ),
+            ),
           ],
         ),
       ),
-      );
+    );
   }
 
   Widget _buildMealTypeRow(String label, int count, int total, Color color) {
-    final percentage = total > 0 ? (count / total * 100).toStringAsFixed(0) : '0';
+    final percentage = total > 0
+        ? (count / total * 100).toStringAsFixed(0)
+        : '0';
     return Row(
       children: [
         Container(
           width: 12,
           height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -1675,7 +1767,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
   }
 
   Widget _buildWeightTrackingSection() {
-    final weightEntries = _reportData['weightEntries'] as List<Map<String, dynamic>>;
+    final weightEntries =
+        _reportData['weightEntries'] as List<Map<String, dynamic>>;
 
     if (weightEntries.isEmpty) {
       return Card(
@@ -1756,10 +1849,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               height: 150,
               child: LineChart(
                 LineChartData(
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                  ),
+                  gridData: FlGridData(show: true, drawVerticalLine: false),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
@@ -1779,7 +1869,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                         getTitlesWidget: (value, meta) {
                           int idx = value.toInt();
                           if (idx >= 0 && idx < weightEntries.length) {
-                            final date = weightEntries[idx]['timestamp'] as DateTime;
+                            final date =
+                                weightEntries[idx]['timestamp'] as DateTime;
                             return Text(
                               '${date.day}/${date.month}',
                               style: const TextStyle(fontSize: 10),
@@ -1789,8 +1880,12 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                         },
                       ),
                     ),
-                    topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
+                    rightTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
                   ),
                   borderData: FlBorderData(show: false),
                   minX: 0,
@@ -1816,19 +1911,19 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-      );
+    );
   }
 
-  Widget _buildWeightStat(String label, double value, String unit, Color color, {String prefix = ''}) {
+  Widget _buildWeightStat(
+    String label,
+    double value,
+    String unit,
+    Color color, {
+    String prefix = '',
+  }) {
     return Column(
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
         const SizedBox(height: 4),
         Text(
           '$prefix${value.toStringAsFixed(1)} $unit',
@@ -1901,26 +1996,36 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   children: [
                     Padding(
                       padding: const EdgeInsets.all(6),
-                      child: Text('Date', style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Date',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.all(6),
-                      child: Text('Calories', style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Calories',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ],
                 ),
-                ...sortedDates.map((date) => TableRow(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text(date),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text('${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}'),
-                    ),
-                  ],
-                )),
+                ...sortedDates.map(
+                  (date) => TableRow(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Text(date),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Text(
+                          '${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ],
@@ -1930,7 +2035,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
   }
 
   Widget _buildTopMealsSection() {
-    final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+    final mealsDetails =
+        _reportData['mealsDetails'] as List<Map<String, dynamic>>;
     if (mealsDetails.isEmpty) {
       return Card(
         elevation: 2,
@@ -1962,7 +2068,9 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
     // Sort meals by calories and take top 5
     final sortedMeals = List<Map<String, dynamic>>.from(mealsDetails);
-    sortedMeals.sort((a, b) => (b['calories'] as double).compareTo(a['calories'] as double));
+    sortedMeals.sort(
+      (a, b) => (b['calories'] as double).compareTo(a['calories'] as double),
+    );
     final topMeals = sortedMeals.take(5).toList();
 
     return Card(
@@ -2003,12 +2111,16 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                           width: 48,
                           height: 48,
                           fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            width: 48,
-                            height: 48,
-                            color: Colors.grey[200],
-                            child: const Icon(Icons.image, color: Colors.grey),
-                          ),
+                          errorBuilder: (context, error, stackTrace) =>
+                              Container(
+                                width: 48,
+                                height: 48,
+                                color: Colors.grey[200],
+                                child: const Icon(
+                                  Icons.image,
+                                  color: Colors.grey,
+                                ),
+                              ),
                         ),
                       )
                     else
@@ -2047,7 +2159,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                           Row(
                             children: [
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
                                   color: color.withOpacity(0.2),
                                   borderRadius: BorderRadius.circular(4),
@@ -2063,7 +2178,9 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                DateFormat('MMM dd').format(meal['date'] as DateTime),
+                                DateFormat(
+                                  'MMM dd',
+                                ).format(meal['date'] as DateTime),
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: Colors.grey[600],
@@ -2076,17 +2193,26 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                             children: [
                               Text(
                                 'P: ${(meal['protein'] as double).toStringAsFixed(1)}g',
-                                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[700],
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Text(
                                 'C: ${(meal['carbs'] as double).toStringAsFixed(1)}g',
-                                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[700],
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Text(
                                 'F: ${(meal['fat'] as double).toStringAsFixed(1)}g',
-                                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[700],
+                                ),
                               ),
                             ],
                           ),
@@ -2107,10 +2233,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                         ),
                         const Text(
                           'kcal',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.grey,
-                          ),
+                          style: TextStyle(fontSize: 10, color: Colors.grey),
                         ),
                       ],
                     ),
@@ -2121,7 +2244,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ),
-      );
+    );
   }
 
   Future<void> _generatePDF() async {
@@ -2156,7 +2279,8 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
       await Printing.layoutPdf(
         onLayout: (PdfPageFormat format) async => pdf.save(),
-        name: 'NutriWise_Report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+        name:
+            'NutriWise_Report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2197,10 +2321,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                 pw.SizedBox(height: 4),
                 pw.Text(
                   'Nutrition Report',
-                  style: pw.TextStyle(
-                    fontSize: 18,
-                    color: PdfColors.grey700,
-                  ),
+                  style: pw.TextStyle(fontSize: 18, color: PdfColors.grey700),
                 ),
               ],
             ),
@@ -2209,7 +2330,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               children: [
                 pw.Text(
                   'Generated on',
-                  style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey),
+                  style: const pw.TextStyle(
+                    fontSize: 10,
+                    color: PdfColors.grey,
+                  ),
                 ),
                 pw.Text(
                   DateFormat('MMM dd, yyyy').format(DateTime.now()),
@@ -2227,10 +2351,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         pw.SizedBox(height: 10),
         pw.Text(
           _reportData['userName'] ?? 'User',
-          style: pw.TextStyle(
-            fontSize: 16,
-            fontWeight: pw.FontWeight.bold,
-          ),
+          style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
         ),
         pw.SizedBox(height: 4),
         pw.Text(
@@ -2262,7 +2383,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               pw.SizedBox(height: 4),
               pw.Text(
                 'Duration: ${widget.endDate.difference(widget.startDate).inDays + 1} days | Total Meals: ${_reportData['totalMeals']}',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+                style: const pw.TextStyle(
+                  fontSize: 10,
+                  color: PdfColors.grey700,
+                ),
               ),
             ],
           ),
@@ -2342,10 +2466,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         pw.SizedBox(height: 4),
         pw.Text(
           value,
-          style: pw.TextStyle(
-            fontSize: 14,
-            fontWeight: pw.FontWeight.bold,
-          ),
+          style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
           textAlign: pw.TextAlign.center,
         ),
       ],
@@ -2378,8 +2499,16 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
             children: [
-              _buildPDFMacroColumn('Carbohydrates', totalCarbs, _reportData['avgDailyCarbs']),
-              _buildPDFMacroColumn('Protein', totalProtein, _reportData['avgDailyProtein']),
+              _buildPDFMacroColumn(
+                'Carbohydrates',
+                totalCarbs,
+                _reportData['avgDailyCarbs'],
+              ),
+              _buildPDFMacroColumn(
+                'Protein',
+                totalProtein,
+                _reportData['avgDailyProtein'],
+              ),
               _buildPDFMacroColumn('Fat', totalFat, _reportData['avgDailyFat']),
             ],
           ),
@@ -2393,10 +2522,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       children: [
         pw.Text(
           label,
-          style: pw.TextStyle(
-            fontSize: 12,
-            fontWeight: pw.FontWeight.bold,
-          ),
+          style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
         ),
         pw.SizedBox(height: 4),
         pw.Text(
@@ -2413,7 +2539,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
 
   pw.Widget _buildPDFMealDistribution() {
     final mealCounts = _reportData['mealTypeCounts'] as Map<String, dynamic>;
-    final totalMeals = mealCounts.values.fold(0, (sum, count) => sum + (count as int));
+    final totalMeals = mealCounts.values.fold(
+      0,
+      (sum, count) => sum + (count as int),
+    );
 
     return pw.Container(
       padding: const pw.EdgeInsets.all(16),
@@ -2434,7 +2563,11 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ),
           pw.SizedBox(height: 12),
           if (totalMeals > 0) ...[
-            _buildPDFMealRow('Breakfast', mealCounts['Breakfast'] ?? 0, totalMeals),
+            _buildPDFMealRow(
+              'Breakfast',
+              mealCounts['Breakfast'] ?? 0,
+              totalMeals,
+            ),
             pw.SizedBox(height: 8),
             _buildPDFMealRow('Lunch', mealCounts['Lunch'] ?? 0, totalMeals),
             pw.SizedBox(height: 8),
@@ -2452,7 +2585,9 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
   }
 
   pw.Widget _buildPDFMealRow(String label, int count, int total) {
-    final percentage = total > 0 ? (count / total * 100).toStringAsFixed(0) : '0';
+    final percentage = total > 0
+        ? (count / total * 100).toStringAsFixed(0)
+        : '0';
     final barWidth = total > 0 ? (count / total * 200) : 0.0;
 
     return pw.Column(
@@ -2463,10 +2598,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           children: [
             pw.Text(
               label,
-              style: pw.TextStyle(
-                fontSize: 12,
-                fontWeight: pw.FontWeight.bold,
-              ),
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
             ),
             pw.Text(
               '$count meals ($percentage%)',
@@ -2499,12 +2631,16 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
   }
 
   pw.Widget _buildPDFWeightTracking() {
-    final weightEntries = _reportData['weightEntries'] as List<Map<String, dynamic>>;
+    final weightEntries =
+        _reportData['weightEntries'] as List<Map<String, dynamic>>;
 
     if (weightEntries.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        child: pw.Text('No weight data available for this period.', style: const pw.TextStyle(fontSize: 12)),
+        child: pw.Text(
+          'No weight data available for this period.',
+          style: const pw.TextStyle(fontSize: 12),
+        ),
       );
     }
 
@@ -2558,7 +2694,9 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   : 'Weight decreased by ${weightChange.abs().toStringAsFixed(1)} $unit',
               style: pw.TextStyle(
                 fontSize: 11,
-                color: weightChange >= 0 ? PdfColors.red700 : PdfColors.green700,
+                color: weightChange >= 0
+                    ? PdfColors.red700
+                    : PdfColors.green700,
               ),
             ),
           ),
@@ -2567,7 +2705,12 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     );
   }
 
-  pw.Widget _buildPDFWeightStat(String label, double value, String unit, {String prefix = ''}) {
+  pw.Widget _buildPDFWeightStat(
+    String label,
+    double value,
+    String unit, {
+    String prefix = '',
+  }) {
     return pw.Column(
       children: [
         pw.Text(
@@ -2578,10 +2721,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
         pw.SizedBox(height: 4),
         pw.Text(
           '$prefix${value.toStringAsFixed(1)} $unit',
-          style: pw.TextStyle(
-            fontSize: 14,
-            fontWeight: pw.FontWeight.bold,
-          ),
+          style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
         ),
       ],
     );
@@ -2592,7 +2732,10 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     if (dailyCalories.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        child: pw.Text('No daily calorie data available.', style: const pw.TextStyle(fontSize: 12)),
+        child: pw.Text(
+          'No daily calorie data available.',
+          style: const pw.TextStyle(fontSize: 12),
+        ),
       );
     }
     final sortedDates = dailyCalories.keys.toList()..sort();
@@ -2628,12 +2771,16 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   _buildPDFTableCell('Calories', isHeader: true),
                 ],
               ),
-              ...sortedDates.map((date) => pw.TableRow(
-                children: [
-                  _buildPDFTableCell(date),
-                  _buildPDFTableCell('${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}'),
-                ],
-              )),
+              ...sortedDates.map(
+                (date) => pw.TableRow(
+                  children: [
+                    _buildPDFTableCell(date),
+                    _buildPDFTableCell(
+                      '${dailyCalories[date]?.toStringAsFixed(0) ?? '0'}',
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ],
@@ -2642,15 +2789,21 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
   }
 
   pw.Widget _buildPDFTopMeals() {
-    final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+    final mealsDetails =
+        _reportData['mealsDetails'] as List<Map<String, dynamic>>;
     if (mealsDetails.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        child: pw.Text('No meal data available.', style: const pw.TextStyle(fontSize: 12)),
+        child: pw.Text(
+          'No meal data available.',
+          style: const pw.TextStyle(fontSize: 12),
+        ),
       );
     }
     final sortedMeals = List<Map<String, dynamic>>.from(mealsDetails);
-    sortedMeals.sort((a, b) => (b['calories'] as double).compareTo(a['calories'] as double));
+    sortedMeals.sort(
+      (a, b) => (b['calories'] as double).compareTo(a['calories'] as double),
+    );
     final topMeals = sortedMeals.take(10).toList();
 
     return pw.Container(
@@ -2699,10 +2852,14 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                     _buildPDFTableCell('${index + 1}'),
                     _buildPDFTableCell(meal['name'] as String),
                     _buildPDFTableCell(meal['mealType'] as String),
-                    _buildPDFTableCell(meal['date'] is DateTime
-                      ? DateFormat('MM/dd').format(meal['date'] as DateTime)
-                      : ''),
-                    _buildPDFTableCell('${(meal['calories'] as double).toStringAsFixed(0)}'),
+                    _buildPDFTableCell(
+                      meal['date'] is DateTime
+                          ? DateFormat('MM/dd').format(meal['date'] as DateTime)
+                          : '',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['calories'] as double).toStringAsFixed(0)}',
+                    ),
                   ],
                 );
               }).toList(),
@@ -2712,16 +2869,19 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       ),
     );
   }
-
   pw.Widget _buildPDFMealDetailsTable() {
-    final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+    final mealsDetails =
+        _reportData['mealsDetails'] as List<Map<String, dynamic>>;
     if (mealsDetails.isEmpty) {
       return pw.Container(
         padding: const pw.EdgeInsets.all(16),
-        child: pw.Text('No meal details available.', style: const pw.TextStyle(fontSize: 12)),
+        child: pw.Text(
+          'No meal details available.',
+          style: const pw.TextStyle(fontSize: 12),
+        ),
       );
     }
-    // Show all meals in a table with food names, meal type, date, calories, protein, carbs, fat, quantity
+    // Show all meals in a table with food names, meal type, date, calories, protein, carbs, fat
     return pw.Container(
       padding: const pw.EdgeInsets.all(16),
       decoration: pw.BoxDecoration(
@@ -2750,7 +2910,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               4: const pw.FlexColumnWidth(1),
               5: const pw.FlexColumnWidth(1),
               6: const pw.FlexColumnWidth(1),
-              7: const pw.FlexColumnWidth(1),
             },
             children: [
               pw.TableRow(
@@ -2764,47 +2923,43 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                   _buildPDFTableCell('Protein', isHeader: true),
                   _buildPDFTableCell('Carbs', isHeader: true),
                   _buildPDFTableCell('Fat', isHeader: true),
-                  _buildPDFTableCell('Quantity', isHeader: true),
                 ],
               ),
               ...mealsDetails.map((meal) {
-                // Try to get quantity from meal or foodItems
-                String quantityStr = '';
-                if (meal.containsKey('quantity')) {
-                  quantityStr = '${meal['quantity']}';
-                } else if (meal.containsKey('foodItems') && meal['foodItems'] is List && (meal['foodItems'] as List).isNotEmpty) {
-                  // Sum all gramsAmount if available
-                  final items = meal['foodItems'] as List;
-                  double totalQty = 0;
-                  for (var item in items) {
-                    if (item is Map && item.containsKey('gramsAmount')) {
-                      totalQty += (item['gramsAmount'] ?? 0).toDouble();
-                    }
-                  }
-                  if (totalQty > 0) {
-                    quantityStr = totalQty.toStringAsFixed(0);
-                  }
-                }
                 // CreatedAt
                 String createdAtStr = '';
                 if (meal['date'] != null && meal['date'] is DateTime) {
-                  createdAtStr = DateFormat('yyyy-MM-dd HH:mm').format(meal['date'] as DateTime);
-                } else if (meal['createdAt'] != null && meal['createdAt'] is DateTime) {
-                  createdAtStr = DateFormat('yyyy-MM-dd HH:mm').format(meal['createdAt'] as DateTime);
+                  createdAtStr = DateFormat(
+                    'yyyy-MM-dd HH:mm',
+                  ).format(meal['date'] as DateTime);
+                } else if (meal['createdAt'] != null &&
+                    meal['createdAt'] is DateTime) {
+                  createdAtStr = DateFormat(
+                    'yyyy-MM-dd HH:mm',
+                  ).format(meal['createdAt'] as DateTime);
                 }
                 return pw.TableRow(
                   children: [
                     _buildPDFTableCell(meal['name'] as String),
                     _buildPDFTableCell(meal['mealType'] as String),
-                    _buildPDFTableCell(meal['date'] is DateTime
-                      ? DateFormat('MM/dd').format(meal['date'] as DateTime)
-                      : ''),
+                    _buildPDFTableCell(
+                      meal['date'] is DateTime
+                          ? DateFormat('MM/dd').format(meal['date'] as DateTime)
+                          : '',
+                    ),
                     _buildPDFTableCell(createdAtStr),
-                    _buildPDFTableCell('${(meal['calories'] as double).toStringAsFixed(0)}'),
-                    _buildPDFTableCell('${(meal['protein'] as double).toStringAsFixed(1)}'),
-                    _buildPDFTableCell('${(meal['carbs'] as double).toStringAsFixed(1)}'),
-                    _buildPDFTableCell('${(meal['fat'] as double).toStringAsFixed(1)}'),
-                    _buildPDFTableCell(quantityStr),
+                    _buildPDFTableCell(
+                      '${(meal['calories'] as double).toStringAsFixed(0)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['protein'] as double).toStringAsFixed(1)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['carbs'] as double).toStringAsFixed(1)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['fat'] as double).toStringAsFixed(1)}',
+                    ),
                   ],
                 );
               }),
@@ -2814,7 +2969,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       ),
     );
   }
-  
 
   pw.Widget _buildPDFTableCell(String text, {bool isHeader = false}) {
     return pw.Padding(
@@ -2889,11 +3043,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
 
   // Add state for nutrition trend week navigation and macro data
   int _selectedNutritionWeekOffset = 0;
-  Map<String, double> _nutritionMacros = {
-    'Carbs': 0,
-    'Protein': 0,
-    'Fat': 0,
-  };
+  Map<String, double> _nutritionMacros = {'Carbs': 0, 'Protein': 0, 'Fat': 0};
 
   @override
   void initState() {
@@ -2908,7 +3058,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
   Future<void> _fetchTargetCalories() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
     setState(() {
       _targetCalories = userDoc.data()?['calories']?.round();
     });
@@ -2923,7 +3076,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
       return;
     }
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
@@ -2933,7 +3088,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -2942,7 +3100,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('meals')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -2976,12 +3137,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       setState(() {
-        _weekMealCounts = {
-          'Breakfast': 0,
-          'Lunch': 0,
-          'Dinner': 0,
-          'Snack': 0,
-        };
+        _weekMealCounts = {'Breakfast': 0, 'Lunch': 0, 'Dinner': 0, 'Snack': 0};
         _weekMealMacros = {
           'Breakfast': [],
           'Lunch': [],
@@ -2992,7 +3148,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
       return;
     }
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedMealWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedMealWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
@@ -3002,7 +3160,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -3011,7 +3172,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('meals')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -3070,7 +3234,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
       return;
     }
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedNutritionWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedNutritionWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
     final startDate = DateTime(monday.year, monday.month, monday.day);
     final endDate = DateTime(sunday.year, sunday.month, sunday.day, 23, 59, 59);
@@ -3080,7 +3246,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('barcodes')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -3089,7 +3258,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('meals')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
@@ -3182,7 +3354,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .collection('users')
         .doc(user.uid)
         .collection('weight_entries')
-        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth))
+        .where(
+          'timestamp',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth),
+        )
         .where('timestamp', isLessThan: Timestamp.fromDate(endOfMonth))
         .orderBy('timestamp', descending: false)
         .get();
@@ -3198,8 +3373,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
     final latest = _weightEntries.last;
     double weight = (latest['weight'] ?? 0.0).toDouble();
     bool metric = latest['isMetric'] == true;
-    final TextEditingController _weightController =
-        TextEditingController(text: weight > 0 ? weight.toStringAsFixed(1) : '');
+    final TextEditingController _weightController = TextEditingController(
+      text: weight > 0 ? weight.toStringAsFixed(1) : '',
+    );
     final _formKey = GlobalKey<FormState>();
 
     await showDialog(
@@ -3207,7 +3383,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
       barrierDismissible: true,
       builder: (ctx) {
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Form(
@@ -3241,10 +3419,16 @@ class _NutrientsPageState extends State<NutrientsPage> {
                   const SizedBox(height: 24),
                   TextFormField(
                     controller: _weightController,
-                    keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: InputDecoration(
-                      labelText: metric ? 'Update Weight (kg)' : 'Update Weight (lbs)',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      labelText: metric
+                          ? 'Update Weight (kg)'
+                          : 'Update Weight (lbs)',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                     validator: (v) {
                       double? val = double.tryParse(v ?? '');
@@ -3267,7 +3451,9 @@ class _NutrientsPageState extends State<NutrientsPage> {
                       ),
                       onPressed: () async {
                         if (_formKey.currentState?.validate() ?? false) {
-                          double? newWeight = double.tryParse(_weightController.text);
+                          double? newWeight = double.tryParse(
+                            _weightController.text,
+                          );
                           if (newWeight != null) {
                             final user = FirebaseAuth.instance.currentUser;
                             if (user != null) {
@@ -3276,8 +3462,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
                                   .collection('users')
                                   .doc(user.uid)
                                   .update({
-                                'weight': double.parse(newWeight.toStringAsFixed(2)),
-                              });
+                                    'weight': double.parse(
+                                      newWeight.toStringAsFixed(2),
+                                    ),
+                                  });
                               // Save weight entry for trend
                               await _authService.saveWeightEntry(
                                 user.uid,
@@ -3293,14 +3481,19 @@ class _NutrientsPageState extends State<NutrientsPage> {
                               );
                               // Refresh weight entries and update graph
                               await _fetchWeightEntries();
-                              setState(() {}); // Force rebuild to update graph and value
+                              setState(
+                                () {},
+                              ); // Force rebuild to update graph and value
                             }
                           }
                         }
                       },
                       child: const Text(
                         'Save',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
                     ),
                   ),
@@ -3378,8 +3571,12 @@ class _NutrientsPageState extends State<NutrientsPage> {
       }
     }
 
-    double minY = spots.isNotEmpty ? spots.map((s) => s.y).reduce((a, b) => a < b ? a : b) - 1 : 0;
-    double maxY = spots.isNotEmpty ? spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) + 1 : 0;
+    double minY = spots.isNotEmpty
+        ? spots.map((s) => s.y).reduce((a, b) => a < b ? a : b) - 1
+        : 0;
+    double maxY = spots.isNotEmpty
+        ? spots.map((s) => s.y).reduce((a, b) => a > b ? a : b) + 1
+        : 0;
     double latestWeight = spots.isNotEmpty ? spots.last.y : 0;
     String unit = (_weightEntries.last['isMetric'] == true) ? 'kg' : 'lbs';
 
@@ -3397,7 +3594,8 @@ class _NutrientsPageState extends State<NutrientsPage> {
                   'Weight Trend',
                   style: TextStyle(
                     fontSize: 18,
-                    fontWeight: FontWeight.bold,color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
                   ),
                 ),
                 Text(
@@ -3415,10 +3613,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
               height: 200,
               child: LineChart(
                 LineChartData(
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                  ),
+                  gridData: FlGridData(show: true, drawVerticalLine: false),
                   titlesData: FlTitlesData(
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
@@ -3448,8 +3643,12 @@ class _NutrientsPageState extends State<NutrientsPage> {
                         },
                       ),
                     ),
-                    topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
+                    rightTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
                   ),
                   borderData: FlBorderData(show: false),
                   minX: 0,
@@ -3490,7 +3689,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
           ],
         ),
       ),
-      );
+    );
   }
 
   Widget _buildIntakeTrend() {
@@ -3520,9 +3719,12 @@ class _NutrientsPageState extends State<NutrientsPage> {
 
     // Week range label
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
-    String weekLabel = "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
+    String weekLabel =
+        "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
 
     bool hasData = _weekCalorieIntake.values.any((v) => v > 0);
 
@@ -3552,12 +3754,17 @@ class _NutrientsPageState extends State<NutrientsPage> {
                     ),
                     Text(
                       weekLabel,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     IconButton(
                       icon: Icon(
                         Icons.chevron_right,
-                        color: _selectedWeekOffset < 0 ? Colors.black : Colors.grey,
+                        color: _selectedWeekOffset < 0
+                            ? Colors.black
+                            : Colors.grey,
                       ),
                       onPressed: _selectedWeekOffset < 0 ? _nextWeek : null,
                     ),
@@ -3573,7 +3780,13 @@ class _NutrientsPageState extends State<NutrientsPage> {
                       BarChartData(
                         alignment: BarChartAlignment.spaceAround,
                         maxY: (target > 0)
-                            ? [target, ...barGroups.map((g) => g.barRods.first.toY)].reduce((a, b) => a > b ? a : b) + 500
+                            ? [
+                                    target,
+                                    ...barGroups.map(
+                                      (g) => g.barRods.first.toY,
+                                    ),
+                                  ].reduce((a, b) => a > b ? a : b) +
+                                  500
                             : 3000,
                         barGroups: barGroups,
                         gridData: FlGridData(
@@ -3601,7 +3814,11 @@ class _NutrientsPageState extends State<NutrientsPage> {
                                 int idx = value.toInt();
                                 if (idx >= 0 && idx < 7) {
                                   final now = DateTime.now();
-                                  final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedWeekOffset));
+                                  final monday = now
+                                      .subtract(Duration(days: now.weekday - 1))
+                                      .add(
+                                        Duration(days: 7 * _selectedWeekOffset),
+                                      );
                                   final date = monday.add(Duration(days: idx));
                                   return Text(
                                     '${date.day}/${date.month}',
@@ -3615,47 +3832,49 @@ class _NutrientsPageState extends State<NutrientsPage> {
                         ),
                         borderData: FlBorderData(show: false),
                         extraLinesData: target > 0
-                            ? ExtraLinesData(horizontalLines: [
-                                HorizontalLine(
-                                  y: target,
-                                  color: Colors.red,
-                                  strokeWidth: 2,
-                                  dashArray: [8, 4],
-                                  label: HorizontalLineLabel(
-                                    show: true,
-                                    alignment: Alignment.topRight,
-                                    style: const TextStyle(
-                                      color: Colors.red,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 10,
+                            ? ExtraLinesData(
+                                horizontalLines: [
+                                  HorizontalLine(
+                                    y: target,
+                                    color: Colors.red,
+                                    strokeWidth: 2,
+                                    dashArray: [8, 4],
+                                    label: HorizontalLineLabel(
+                                      show: true,
+                                      alignment: Alignment.topRight,
+                                      style: const TextStyle(
+                                        color: Colors.red,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 10,
+                                      ),
+                                      labelResolver: (_) => 'Target',
                                     ),
-                                    labelResolver: (_) => 'Target',
                                   ),
-                                ),
-                              ])
+                                ],
+                              )
                             : ExtraLinesData(),
                       ),
                     )
-              : Center(
-                  child: Text(
-                    'No intake data for this week.',
-                    style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildLegendItem(Colors.green, 'Actual'),
-                  const SizedBox(width: 16),
-                  _buildLegendItem(Colors.red, 'Target'),
-                ],
-              ),
-            ],
-          ),
+                  : Center(
+                      child: Text(
+                        'No intake data for this week.',
+                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildLegendItem(Colors.green, 'Actual'),
+                const SizedBox(width: 16),
+                _buildLegendItem(Colors.red, 'Target'),
+              ],
+            ),
+          ],
         ),
-      );
+      ),
+    );
   }
 
   // Removed unused _makeBarGroup method
@@ -3666,16 +3885,10 @@ class _NutrientsPageState extends State<NutrientsPage> {
         Container(
           width: 12,
           height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12),
-        ),
+        Text(label, style: const TextStyle(fontSize: 12)),
       ],
     );
   }
@@ -3686,38 +3899,73 @@ class _NutrientsPageState extends State<NutrientsPage> {
     final List<PieChartSectionData> sections = [
       PieChartSectionData(
         color: Colors.orange,
-        value: totalMeals > 0 ? (_weekMealCounts['Breakfast']! * 100 / totalMeals) : 0,
-        title: totalMeals > 0 ? '${(_weekMealCounts['Breakfast']! * 100 / totalMeals).toStringAsFixed(0)}%' : '',
+        value: totalMeals > 0
+            ? (_weekMealCounts['Breakfast']! * 100 / totalMeals)
+            : 0,
+        title: totalMeals > 0
+            ? '${(_weekMealCounts['Breakfast']! * 100 / totalMeals).toStringAsFixed(0)}%'
+            : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
       PieChartSectionData(
         color: Colors.teal,
-        value: totalMeals > 0 ? (_weekMealCounts['Lunch']! * 100 / totalMeals) : 0,
-        title: totalMeals > 0 ? '${(_weekMealCounts['Lunch']! * 100 / totalMeals).toStringAsFixed(0)}%' : '',
+        value: totalMeals > 0
+            ? (_weekMealCounts['Lunch']! * 100 / totalMeals)
+            : 0,
+        title: totalMeals > 0
+            ? '${(_weekMealCounts['Lunch']! * 100 / totalMeals).toStringAsFixed(0)}%'
+            : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
       PieChartSectionData(
         color: Colors.green,
-        value: totalMeals > 0 ? (_weekMealCounts['Dinner']! * 100 / totalMeals) : 0,
-        title: totalMeals > 0 ? '${(_weekMealCounts['Dinner']! * 100 / totalMeals).toStringAsFixed(0)}%' : '',
+        value: totalMeals > 0
+            ? (_weekMealCounts['Dinner']! * 100 / totalMeals)
+            : 0,
+        title: totalMeals > 0
+            ? '${(_weekMealCounts['Dinner']! * 100 / totalMeals).toStringAsFixed(0)}%'
+            : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
       PieChartSectionData(
         color: Colors.blue,
-        value: totalMeals > 0 ? (_weekMealCounts['Snack']! * 100 / totalMeals) : 0,
-        title: totalMeals > 0 ? '${(_weekMealCounts['Snack']! * 100 / totalMeals).toStringAsFixed(0)}%' : '',
+        value: totalMeals > 0
+            ? (_weekMealCounts['Snack']! * 100 / totalMeals)
+            : 0,
+        title: totalMeals > 0
+            ? '${(_weekMealCounts['Snack']! * 100 / totalMeals).toStringAsFixed(0)}%'
+            : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
     ];
 
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedMealWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedMealWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
-    String weekLabel = "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
+    String weekLabel =
+        "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
 
     return Card(
       elevation: 2,
@@ -3745,14 +3993,21 @@ class _NutrientsPageState extends State<NutrientsPage> {
                     ),
                     Text(
                       weekLabel,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     IconButton(
                       icon: Icon(
                         Icons.chevron_right,
-                        color: _selectedMealWeekOffset < 0 ? Colors.black : Colors.grey,
+                        color: _selectedMealWeekOffset < 0
+                            ? Colors.black
+                            : Colors.grey,
                       ),
-                      onPressed: _selectedMealWeekOffset < 0 ? _nextMealWeek : null,
+                      onPressed: _selectedMealWeekOffset < 0
+                          ? _nextMealWeek
+                          : null,
                     ),
                   ],
                 ),
@@ -3813,7 +4068,7 @@ class _NutrientsPageState extends State<NutrientsPage> {
           ],
         ),
       ),
-      );
+    );
   }
 
   Widget _buildMealLegend(Color color, String label) {
@@ -3822,25 +4077,22 @@ class _NutrientsPageState extends State<NutrientsPage> {
         Container(
           width: 12,
           height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 10),
-        ),
+        Text(label, style: const TextStyle(fontSize: 10)),
       ],
     );
   }
 
   Widget _buildNutritionTrend() {
     final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1)).add(Duration(days: 7 * _selectedNutritionWeekOffset));
+    final monday = now
+        .subtract(Duration(days: now.weekday - 1))
+        .add(Duration(days: 7 * _selectedNutritionWeekOffset));
     final sunday = monday.add(const Duration(days: 6));
-    String weekLabel = "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
+    String weekLabel =
+        "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
 
     final totalMacros = _nutritionMacros.values.reduce((a, b) => a + b);
     final List<PieChartSectionData> sections = [
@@ -3849,21 +4101,33 @@ class _NutrientsPageState extends State<NutrientsPage> {
         value: totalMacros > 0 ? _nutritionMacros['Carbs']! : 0,
         title: totalMacros > 0 ? 'Carbs' : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
       PieChartSectionData(
         color: Colors.blue,
         value: totalMacros > 0 ? _nutritionMacros['Protein']! : 0,
         title: totalMacros > 0 ? 'Protein' : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
       PieChartSectionData(
         color: Colors.orange,
         value: totalMacros > 0 ? _nutritionMacros['Fat']! : 0,
         title: totalMacros > 0 ? 'Fat' : '',
         radius: 60,
-        titleStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+        titleStyle: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
     ];
 
@@ -3877,32 +4141,51 @@ class _NutrientsPageState extends State<NutrientsPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Nutrition Trend',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.green,
+                const Flexible(
+                  child: Text(
+                    'Nutrition Trend',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
                   ),
                 ),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      onPressed: _previousNutritionWeek,
-                    ),
-                    Text(
-                      weekLabel,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.chevron_right,
-                        color: _selectedNutritionWeekOffset < 0 ? Colors.black : Colors.grey,
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.chevron_left),
+                        onPressed: _previousNutritionWeek,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
                       ),
-                      onPressed: _selectedNutritionWeekOffset < 0 ? _nextNutritionWeek : null,
-                    ),
-                  ],
+                      Flexible(
+                        child: Text(
+                          weekLabel,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.chevron_right,
+                          color: _selectedNutritionWeekOffset < 0
+                              ? Colors.black
+                              : Colors.grey,
+                        ),
+                        onPressed: _selectedNutritionWeekOffset < 0
+                            ? _nextNutritionWeek
+                            : null,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -3964,7 +4247,11 @@ class MealDetailPage extends StatelessWidget {
         ),
         title: Text(
           'Meal Details ($weekLabel)',
-          style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         centerTitle: true,
       ),
@@ -3994,7 +4281,8 @@ class MealDetailPage extends StatelessWidget {
           for (var macro in meals) {
             totalCalories += (macro['calories'] ?? 0).toDouble();
             totalProtein += (macro['protein'] ?? 0).toDouble();
-            totalCarbs += (macro['carbohydrate'] ?? macro['carbs'] ?? 0).toDouble();
+            totalCarbs += (macro['carbohydrate'] ?? macro['carbs'] ?? 0)
+                .toDouble();
             totalFat += (macro['fat'] ?? 0).toDouble();
           }
           final totalMacros = totalProtein + totalCarbs + totalFat;
@@ -4004,21 +4292,33 @@ class MealDetailPage extends StatelessWidget {
               value: totalMacros > 0 ? totalCarbs : 0,
               title: totalMacros > 0 ? 'Carbs' : '',
               radius: 40,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
             PieChartSectionData(
               color: Colors.blue,
               value: totalMacros > 0 ? totalProtein : 0,
               title: totalMacros > 0 ? 'Protein' : '',
               radius: 40,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
             PieChartSectionData(
               color: Colors.orange,
               value: totalMacros > 0 ? totalFat : 0,
               title: totalMacros > 0 ? 'Fat' : '',
               radius: 40,
-              titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+              titleStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
           ];
           return Card(
@@ -4031,7 +4331,11 @@ class MealDetailPage extends StatelessWidget {
                 children: [
                   Text(
                     type,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -4047,7 +4351,10 @@ class MealDetailPage extends StatelessWidget {
                         : Center(
                             child: Text(
                               'No macro data for $type.',
-                              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                              ),
                             ),
                           ),
                   ),
@@ -4055,10 +4362,34 @@ class MealDetailPage extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(child: _buildMacroColumn('Calories', totalCalories, Colors.red)),
-                      Expanded(child: _buildMacroColumn('Protein', totalProtein, Colors.blue)),
-                      Expanded(child: _buildMacroColumn('Carbs', totalCarbs, Colors.green)),
-                      Expanded(child: _buildMacroColumn('Fat', totalFat, Colors.orange)),
+                      Expanded(
+                        child: _buildMacroColumn(
+                          'Calories',
+                          totalCalories,
+                          Colors.red,
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildMacroColumn(
+                          'Protein',
+                          totalProtein,
+                          Colors.blue,
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildMacroColumn(
+                          'Carbs',
+                          totalCarbs,
+                          Colors.green,
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildMacroColumn(
+                          'Fat',
+                          totalFat,
+                          Colors.orange,
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -4074,13 +4405,7 @@ class MealDetailPage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.black54,
-          ),
-        ),
+        Text(label, style: TextStyle(fontSize: 14, color: Colors.black54)),
         const SizedBox(height: 4),
         Container(
           width: double.infinity,

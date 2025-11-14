@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../home/home_screen.dart';
 import 'login_screen.dart';
-import 'signup_screen.dart';
 
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
@@ -34,22 +33,46 @@ class AuthWrapper extends StatelessWidget {
         }
         final user = snapshot.data;
         if (user != null) {
-          if (!user.emailVerified) {
-            return EmailNotVerifiedScreen(user: user);
-          }
-          return FutureBuilder<Map<String, dynamic>>(
-            future: _getUserInfo(user.uid),
-            builder: (context, infoSnapshot) {
-              if (infoSnapshot.connectionState == ConnectionState.waiting) {
+          // Always check if user document exists first - this determines if signup is complete
+          // Use a key to prevent unnecessary rebuilds
+          return FutureBuilder<DocumentSnapshot>(
+            key: ValueKey('user_doc_${user.uid}'),
+            future: FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
+            builder: (context, docSnapshot) {
+              if (docSnapshot.connectionState == ConnectionState.waiting) {
                 return const Scaffold(body: Center(child: CircularProgressIndicator()));
               }
-              if (infoSnapshot.hasError) {
-                return HomeScreen();
+              
+              // If document doesn't exist, user is in signup flow
+              // CRITICAL: Never show HomeScreen if document doesn't exist, regardless of email verification status
+              if (!docSnapshot.hasData || !docSnapshot.data!.exists) {
+                // Always show loading during signup flow - EmailVerificationScreen will handle navigation
+                return const Scaffold(
+                  body: Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                );
               }
-              final data = infoSnapshot.data;
-              final name = data?['name'] ?? 'User';
-              final calories = data?['dailyCalories'] ?? 0;
-              return HomeScreen();
+              
+              // Document exists - signup is complete, check email verification
+              if (!user.emailVerified) {
+                // Document exists but email not verified - show verification screen
+                return EmailNotVerifiedScreen(user: user);
+              }
+              
+              // User is verified and document exists - show HomeScreen
+              return FutureBuilder<Map<String, dynamic>>(
+                future: _getUserInfo(user.uid),
+                builder: (context, infoSnapshot) {
+                  if (infoSnapshot.connectionState == ConnectionState.waiting) {
+                    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                  }
+                  if (infoSnapshot.hasError) {
+                    return HomeScreen();
+                  }
+                  return HomeScreen();
+                },
+              );
             },
           );
         } else {

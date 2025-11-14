@@ -25,6 +25,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLogModalOpen = false;
   final AuthService _authService = AuthService();
 
+  // Refresh key to force FutureBuilder to rebuild when meal is saved
+  int _refreshKey = 0;
+
   @override
   void initState() {
     super.initState();
@@ -338,9 +341,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   ) ??
                                                   170
                                             : 170;
-                                        // Use height unit setting for BMR conversion
-                                        final isMetric =
-                                            data['isMetric'] == true;
+                                        // Use weight unit setting for BMR and goal adjustment
+                                        // Note: calculateBMR assumes weight and height use same unit system
+                                        final isWeightMetric =
+                                            data['isWeightMetric'] == true;
                                         final trainingType =
                                             data['trainingType'] ??
                                             'None or Related Activity';
@@ -359,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           weight: newWeight,
                                           height: height.toDouble(),
                                           age: age,
-                                          isMetric: isMetric,
+                                          isMetric: isWeightMetric,
                                         );
                                         double activity = getActivityFactor(
                                           trainingType,
@@ -368,9 +372,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                         double goalAdj = getGoalAdjustment(
                                           mainGoal,
                                           pace,
-                                          isMetric,
+                                          isWeightMetric,
                                         );
                                         double calories = tdee + goalAdj;
+                                        // Ensure minimum calories for safety
+                                        if (calories < 1200) calories = 1200;
 
                                         final macroPercents = getMacroPercents(
                                           dietType,
@@ -411,8 +417,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                             });
                                         // --- Save weight entry for trend ---
                                         await _authService.saveWeightEntry(
-                                          FirebaseAuth.instance.currentUser!.uid,
-                                          double.parse(newWeight.toStringAsFixed(2)),
+                                          FirebaseAuth
+                                              .instance
+                                              .currentUser!
+                                              .uid,
+                                          double.parse(
+                                            newWeight.toStringAsFixed(2),
+                                          ),
                                           isMetric: metric,
                                         );
                                         Navigator.of(ctx).pop();
@@ -478,108 +489,109 @@ class _HomeScreenState extends State<HomeScreen> {
         date.year == selectedDate.year;
   }
 
-Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return [];
-  
-  final dateStr = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
-  
-  // Fetch from NEW 'meals' collection
-  final mealsSnapshot = await FirebaseFirestore.instance
-      .collection('users')
-      .doc(user.uid)
-      .collection('meals')
-      .where('date', isEqualTo: dateStr)
-      .orderBy('createdAt', descending: true)
-      .get();
-  
-  // Also fetch from OLD 'barcodes' collection for backward compatibility
-  final barcodesSnapshot = await FirebaseFirestore.instance
-      .collection('users')
-      .doc(user.uid)
-      .collection('barcodes')
-      .where('date', isEqualTo: dateStr)
-      .orderBy('createdAt', descending: true)
-      .get();
-  
-  List<Map<String, dynamic>> allMeals = [];
-  
-  // Process NEW meals structure - KEEP AS ONE MEAL (don't split)
-  for (var mealDoc in mealsSnapshot.docs) {
-    final mealData = mealDoc.data();
-    final foodItems = mealData['foodItems'] as List<dynamic>? ?? [];
-    
-    // Combine all food names
-    List<String> foodNames = [];
-    int totalCalories = 0;
-    int totalCarbs = 0;
-    int totalProtein = 0;
-    int totalFat = 0;
-    int totalGrams = 0;
-    
-    for (var foodItem in foodItems) {
-      final foodData = foodItem as Map<String, dynamic>;
-      foodNames.add(foodData['foodName'] ?? 'Unknown');
-      totalCalories += _safeNum(foodData['calories']);
-      totalCarbs += _safeNum(foodData['carbs']);
-      totalProtein += _safeNum(foodData['protein']);
-      totalFat += _safeNum(foodData['fat']);
-      totalGrams += _safeNum(foodData['gramsAmount']);
+  Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return [];
+
+    final dateStr =
+        "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+
+    // Fetch from NEW 'meals' collection
+    final mealsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('meals')
+        .where('date', isEqualTo: dateStr)
+        .orderBy('createdAt', descending: true)
+        .get();
+
+    // Also fetch from OLD 'barcodes' collection for backward compatibility
+    final barcodesSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('barcodes')
+        .where('date', isEqualTo: dateStr)
+        .orderBy('createdAt', descending: true)
+        .get();
+
+    List<Map<String, dynamic>> allMeals = [];
+
+    // Process NEW meals structure - KEEP AS ONE MEAL (don't split)
+    for (var mealDoc in mealsSnapshot.docs) {
+      final mealData = mealDoc.data();
+      final foodItems = mealData['foodItems'] as List<dynamic>? ?? [];
+
+      // Combine all food names
+      List<String> foodNames = [];
+      int totalCalories = 0;
+      int totalCarbs = 0;
+      int totalProtein = 0;
+      int totalFat = 0;
+      int totalGrams = 0;
+
+      for (var foodItem in foodItems) {
+        final foodData = foodItem as Map<String, dynamic>;
+        foodNames.add(foodData['foodName'] ?? 'Unknown');
+        totalCalories += _safeNum(foodData['calories']);
+        totalCarbs += _safeNum(foodData['carbs']);
+        totalProtein += _safeNum(foodData['protein']);
+        totalFat += _safeNum(foodData['fat']);
+        totalGrams += _safeNum(foodData['gramsAmount']);
+      }
+
+      // Create ONE meal entry with combined data
+      allMeals.add({
+        'foodName': foodNames.join(', '), // "Githeri, Gratin"
+        'foodCount': foodItems.length, // Number of foods in this meal
+        'calories': totalCalories,
+        'carbs': totalCarbs,
+        'protein': totalProtein,
+        'fat': totalFat,
+        'grams': totalGrams,
+        'mealType': mealData['mealType'] ?? 'Meal',
+        'time': mealData['time'] ?? '',
+        'date': mealData['date'] ?? '',
+        'source': 'AI Detection',
+        'imageUrl': mealData['originalImageUrl'],
+        'mealId': mealDoc.id,
+        'createdAt': mealData['createdAt'],
+        'isGrouped': true, // Flag to indicate this is a grouped meal
+      });
     }
-    
-    // Create ONE meal entry with combined data
-    allMeals.add({
-      'foodName': foodNames.join(', '), // "Githeri, Gratin"
-      'foodCount': foodItems.length, // Number of foods in this meal
-      'calories': totalCalories,
-      'carbs': totalCarbs,
-      'protein': totalProtein,
-      'fat': totalFat,
-      'grams': totalGrams,
-      'mealType': mealData['mealType'] ?? 'Meal',
-      'time': mealData['time'] ?? '',
-      'date': mealData['date'] ?? '',
-      'source': 'AI Detection',
-      'imageUrl': mealData['originalImageUrl'],
-      'mealId': mealDoc.id,
-      'createdAt': mealData['createdAt'],
-      'isGrouped': true, // Flag to indicate this is a grouped meal
-    });
-  }
-  
-  // Process OLD barcodes structure (backward compatibility)
-  for (var doc in barcodesSnapshot.docs) {
-    final data = doc.data();
-    allMeals.add({
-      'foodName': data['foodName'] ?? 'Unknown',
-      'foodCount': 1,
-      'calories': data['calories'] ?? 0,
-      'carbs': data['carbs'] ?? 0,
-      'protein': data['protein'] ?? 0,
-      'fat': data['fat'] ?? 0,
-      'grams': data['grams'] ?? 100,
-      'mealType': data['mealType'] ?? 'Meal',
-      'time': data['time'] ?? '',
-      'date': data['date'] ?? '',
-      'source': 'Barcode',
-      'createdAt': data['timestamp'] ?? data['createdAt'],
-      'isGrouped': false,
-    });
-  }
-  
-  // Sort by creation time (most recent first)
-  allMeals.sort((a, b) {
-    final aTime = a['createdAt'];
-    final bTime = b['createdAt'];
-    if (aTime == null || bTime == null) return 0;
-    if (aTime is Timestamp && bTime is Timestamp) {
-      return bTime.compareTo(aTime);
+
+    // Process OLD barcodes structure (backward compatibility)
+    for (var doc in barcodesSnapshot.docs) {
+      final data = doc.data();
+      allMeals.add({
+        'foodName': data['foodName'] ?? 'Unknown',
+        'foodCount': 1,
+        'calories': data['calories'] ?? 0,
+        'carbs': data['carbs'] ?? 0,
+        'protein': data['protein'] ?? 0,
+        'fat': data['fat'] ?? 0,
+        'grams': data['grams'] ?? 100,
+        'mealType': data['mealType'] ?? 'Meal',
+        'time': data['time'] ?? '',
+        'date': data['date'] ?? '',
+        'source': 'Barcode',
+        'createdAt': data['timestamp'] ?? data['createdAt'],
+        'isGrouped': false,
+      });
     }
-    return 0;
-  });
-  
-  return allMeals;
-}
+
+    // Sort by creation time (most recent first)
+    allMeals.sort((a, b) {
+      final aTime = a['createdAt'];
+      final bTime = b['createdAt'];
+      if (aTime == null || bTime == null) return 0;
+      if (aTime is Timestamp && bTime is Timestamp) {
+        return bTime.compareTo(aTime);
+      }
+      return 0;
+    });
+
+    return allMeals;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -689,7 +701,18 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                   bool isSelected = _isSelectedDate(date);
                                   bool isFuture = date.isAfter(DateTime.now());
                                   const months = [
-                                    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec',
+                                    'Jan',
+                                    'Feb',
+                                    'Mar',
+                                    'Apr',
+                                    'May',
+                                    'Jun',
+                                    'Jul',
+                                    'Aug',
+                                    'Sep',
+                                    'Oct',
+                                    'Nov',
+                                    'Dec',
                                   ];
                                   return Expanded(
                                     child: GestureDetector(
@@ -705,7 +728,9 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                         child: AbsorbPointer(
                                           absorbing: isFuture,
                                           child: Container(
-                                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                                            margin: const EdgeInsets.symmetric(
+                                              horizontal: 2,
+                                            ),
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
@@ -729,10 +754,19 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                                         : Colors.transparent,
                                                     shape: BoxShape.circle,
                                                     border: Border.all(
-                                                      color: date.day == DateTime.now().day &&
-                                                              date.month == DateTime.now().month &&
-                                                              date.year == DateTime.now().year
-                                                          ? Colors.yellow.shade700
+                                                      color:
+                                                          date.day ==
+                                                                  DateTime.now()
+                                                                      .day &&
+                                                              date.month ==
+                                                                  DateTime.now()
+                                                                      .month &&
+                                                              date.year ==
+                                                                  DateTime.now()
+                                                                      .year
+                                                          ? Colors
+                                                                .yellow
+                                                                .shade700
                                                           : Colors.transparent,
                                                       width: 2,
                                                     ),
@@ -742,27 +776,38 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                                     height: 36,
                                                     child: Center(
                                                       child: Column(
-                                                        mainAxisSize: MainAxisSize.min,
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
                                                         children: [
                                                           if (isSelected)
                                                             Text(
-                                                              months[date.month - 1],
+                                                              months[date
+                                                                      .month -
+                                                                  1],
                                                               style: const TextStyle(
                                                                 fontSize: 8,
-                                                                color: Colors.green,
-                                                                fontWeight: FontWeight.w600,
+                                                                color: Colors
+                                                                    .green,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
                                                               ),
                                                             ),
                                                           if (isSelected)
-                                                            const SizedBox(height: 1),
+                                                            const SizedBox(
+                                                              height: 1,
+                                                            ),
                                                           Text(
                                                             '${date.day}',
                                                             style: TextStyle(
                                                               fontSize: 13,
-                                                              fontWeight: FontWeight.bold,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
                                                               color: isSelected
                                                                   ? Colors.green
-                                                                  : Colors.white,
+                                                                  : Colors
+                                                                        .white,
                                                             ),
                                                           ),
                                                         ],
@@ -794,10 +839,16 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                   ),
                   Expanded(
                     child: FutureBuilder<List<Map<String, dynamic>>>(
+                      key: ValueKey(
+                        'meals_${selectedDate.toString()}_$_refreshKey',
+                      ),
                       future: _fetchMealsForDate(selectedDate),
                       builder: (context, mealSnapshot) {
-                        if (mealSnapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator());
+                        if (mealSnapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
                         }
                         if (mealSnapshot.hasError) {
                           return Center(
@@ -818,13 +869,13 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                           proteinConsumed += _safeNum(meal['protein']);
                           fatConsumed += _safeNum(meal['fat']);
                         }
-                        
+
                         // Calculate if goals are met/exceeded
                         bool caloriesGoalMet = caloriesConsumed >= dailyGoal;
                         bool carbsGoalMet = carbsConsumed >= carbsTarget;
                         bool proteinGoalMet = proteinConsumed >= proteinTarget;
                         bool fatGoalMet = fatConsumed >= fatTarget;
-                        
+
                         return SingleChildScrollView(
                           padding: const EdgeInsets.all(12.0),
                           child: Column(
@@ -893,12 +944,20 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                             size: const Size(120, 120),
                                             painter: SemiCircleProgressPainter(
                                               progress: dailyGoal > 0
-                                                  ? (caloriesConsumed / dailyGoal).clamp(0.0, 1.0)
+                                                  ? (caloriesConsumed /
+                                                            dailyGoal)
+                                                        .clamp(0.0, 1.0)
                                                   : 0,
-                                              backgroundColor: Colors.grey[200]!,
-                                              progressColor: caloriesGoalMet 
-                                                  ? Colors.green 
-                                                  : const Color.fromARGB(255, 47, 222, 38),
+                                              backgroundColor:
+                                                  Colors.grey[200]!,
+                                              progressColor: caloriesGoalMet
+                                                  ? Colors.green
+                                                  : const Color.fromARGB(
+                                                      255,
+                                                      47,
+                                                      222,
+                                                      38,
+                                                    ),
                                               strokeWidth: 8,
                                             ),
                                           ),
@@ -911,7 +970,8 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                                     '✓',
                                                     style: TextStyle(
                                                       fontSize: 32,
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
                                                       color: Colors.green,
                                                     ),
                                                   ),
@@ -927,7 +987,8 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                                     '${caloriesConsumed - dailyGoal}',
                                                     style: const TextStyle(
                                                       fontSize: 16,
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
                                                       color: Colors.orange,
                                                     ),
                                                   ),
@@ -945,7 +1006,8 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                                                         : '-',
                                                     style: const TextStyle(
                                                       fontSize: 22,
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
                                                       color: Colors.black87,
                                                     ),
                                                   ),
@@ -1004,201 +1066,260 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
                               ),
                               const SizedBox(height: 16),
                               ...meals.isEmpty
-                                    ? [
+                                  ? [
                                       Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(12),
-                                        boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.grey.withOpacity(0.08),
-                                          spreadRadius: 1,
-                                          blurRadius: 6,
-                                          offset: const Offset(0, 1),
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.grey.withOpacity(
+                                                0.08,
+                                              ),
+                                              spreadRadius: 1,
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
                                         ),
-                                        ],
-                                      ),
-                                      child: const Center(
-                                        child: Text(
-                                        'No meals logged for this day.',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          color: Colors.grey,
+                                        child: const Center(
+                                          child: Text(
+                                            'No meals logged for this day.',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
                                         ),
-                                        ),
-                                      ),
                                       ),
                                     ]
-                                    : meals.map((meal) {
-                                      final isAIDetected = meal['source'] == 'AI Detection';
-                                      final foodCount = _safeNum(meal['foodCount']);
-                                      final isGrouped = meal['isGrouped'] == true;
-                                      
+                                  : meals.map((meal) {
+                                      final isAIDetected =
+                                          meal['source'] == 'AI Detection';
+                                      final foodCount = _safeNum(
+                                        meal['foodCount'],
+                                      );
+                                      final isGrouped =
+                                          meal['isGrouped'] == true;
+
                                       return Container(
-                                      width: double.infinity,
-                                      margin: const EdgeInsets.only(bottom: 12),
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(12),
-                                        boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.grey.withOpacity(0.08),
-                                          spreadRadius: 1,
-                                          blurRadius: 6,
-                                          offset: const Offset(0, 1),
+                                        width: double.infinity,
+                                        margin: const EdgeInsets.only(
+                                          bottom: 12,
                                         ),
-                                        ],
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                        // Food name(s) and calories row
-                                        Row(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.grey.withOpacity(
+                                                0.08,
+                                              ),
+                                              spreadRadius: 1,
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 1),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
-                                          Expanded(
-                                            child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                              meal['foodName']?.toString() ?? 'Unknown Food',
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w600,
-                                                color: Colors.black87,
-                                              ),
-                                              maxLines: 3,
-                                              overflow: TextOverflow.ellipsis,
-                                              ),
-                                              // Show food count badge if multiple items
-                                              if (isGrouped && foodCount > 1) ...[
-                                              const SizedBox(height: 4),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                horizontal: 8,
-                                                vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                color: Colors.green.withOpacity(0.1),
-                                                borderRadius: BorderRadius.circular(12),
-                                                border: Border.all(
-                                                  color: Colors.green.withOpacity(0.3),
-                                                ),
-                                                ),
-                                                child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(
-                                                  Icons.restaurant,
-                                                  size: 12,
-                                                  color: Colors.green[700],
+                                            // Food name(s) and calories row
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        meal['foodName']
+                                                                ?.toString() ??
+                                                            'Unknown Food',
+                                                        style: const TextStyle(
+                                                          fontSize: 16,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: Colors.black87,
+                                                        ),
+                                                        maxLines: 3,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                      // Show food count badge if multiple items
+                                                      if (isGrouped &&
+                                                          foodCount > 1) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                horizontal: 8,
+                                                                vertical: 2,
+                                                              ),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.green
+                                                                .withOpacity(
+                                                                  0.1,
+                                                                ),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  12,
+                                                                ),
+                                                            border: Border.all(
+                                                              color: Colors
+                                                                  .green
+                                                                  .withOpacity(
+                                                                    0.3,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Icon(
+                                                                Icons
+                                                                    .restaurant,
+                                                                size: 12,
+                                                                color: Colors
+                                                                    .green[700],
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 4,
+                                                              ),
+                                                              Text(
+                                                                '$foodCount items',
+                                                                style: TextStyle(
+                                                                  fontSize: 11,
+                                                                  color: Colors
+                                                                      .green[700],
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
                                                   ),
-                                                  const SizedBox(width: 4),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.end,
+                                                  children: [
+                                                    Text(
+                                                      '${_safeNum(meal['calories'])} kcal',
+                                                      style: const TextStyle(
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: Colors.black87,
+                                                      ),
+                                                    ),
+                                                    if (meal['grams'] != null)
+                                                      Text(
+                                                        '${_safeNum(meal['grams'])}g',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color:
+                                                              Colors.grey[600],
+                                                        ),
+                                                      ),
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+
+                                            // Meal type and source indicator
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  isAIDetected
+                                                      ? Icons.camera_alt
+                                                      : Icons.qr_code_2,
+                                                  size: 14,
+                                                  color: isAIDetected
+                                                      ? Colors.green
+                                                      : Colors.orange,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Expanded(
+                                                  child: Text(
+                                                    '${meal['mealType']?.toString() ?? 'Meal'} • ${isAIDetected ? 'AI detected' : 'Barcode scanned'}',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: isAIDetected
+                                                          ? Colors.green
+                                                          : Colors.orange,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (meal['time'] != null &&
+                                                    meal['time']
+                                                        .toString()
+                                                        .isNotEmpty)
                                                   Text(
-                                                  '$foodCount items',
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: Colors.green[700],
-                                                    fontWeight: FontWeight.w600,
+                                                    meal['time'].toString(),
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey,
+                                                      fontWeight:
+                                                          FontWeight.w400,
+                                                    ),
                                                   ),
+                                              ],
+                                            ),
+
+                                            const SizedBox(height: 8),
+
+                                            // Macros chips (showing COMBINED totals)
+                                            SingleChildScrollView(
+                                              scrollDirection: Axis.horizontal,
+                                              child: Row(
+                                                children: [
+                                                  _buildMacroChip(
+                                                    'Carbs',
+                                                    '${_safeNum(meal['carbs'])}g',
+                                                    Colors.orange,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  _buildMacroChip(
+                                                    'Protein',
+                                                    '${_safeNum(meal['protein'])}g',
+                                                    Colors.red,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  _buildMacroChip(
+                                                    'Fat',
+                                                    '${_safeNum(meal['fat'])}g',
+                                                    Colors.blue,
                                                   ),
                                                 ],
-                                                ),
-                                              ),
-                                              ],
-                                            ],
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.end,
-                                            children: [
-                                            Text(
-                                              '${_safeNum(meal['calories'])} kcal',
-                                              style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: Colors.black87,
                                               ),
                                             ),
-                                            if (meal['grams'] != null)
-                                              Text(
-                                              '${_safeNum(meal['grams'])}g',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[600],
-                                              ),
-                                              ),
-                                            ],
-                                          ),
+                                            // No image shown
                                           ],
                                         ),
-                                        const SizedBox(height: 8),
-                                        
-                                        // Meal type and source indicator
-                                        Row(
-                                          children: [
-                                          Icon(
-                                            isAIDetected ? Icons.camera_alt : Icons.qr_code_2,
-                                            size: 14,
-                                            color: isAIDetected ? Colors.green : Colors.orange,
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: Text(
-                                            '${meal['mealType']?.toString() ?? 'Meal'} • ${isAIDetected ? 'AI detected' : 'Barcode scanned'}',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: isAIDetected ? Colors.green : Colors.orange,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                            ),
-                                          ),
-                                          if (meal['time'] != null && meal['time'].toString().isNotEmpty)
-                                            Text(
-                                            meal['time'].toString(),
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey,
-                                              fontWeight: FontWeight.w400,
-                                            ),
-                                            ),
-                                          ],
-                                        ),
-                                        
-                                        const SizedBox(height: 8),
-                                        
-                                        // Macros chips (showing COMBINED totals)
-                                        SingleChildScrollView(
-                                          scrollDirection: Axis.horizontal,
-                                          child: Row(
-                                          children: [
-                                            _buildMacroChip(
-                                            'Carbs',
-                                            '${_safeNum(meal['carbs'])}g',
-                                            Colors.orange,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            _buildMacroChip(
-                                            'Protein',
-                                            '${_safeNum(meal['protein'])}g',
-                                            Colors.red,
-                                            ),
-                                            const SizedBox(width: 8),
-                                            _buildMacroChip(
-                                            'Fat',
-                                            '${_safeNum(meal['fat'])}g',
-                                            Colors.blue,
-                                            ),
-                                          ],
-                                          ),
-                                        ),
-                                        // No image shown
-                                        ],
-                                      ),
                                       );
                                     }).toList(),
                             ],
@@ -1234,7 +1355,7 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
     setState(() {
       _isLogModalOpen = true;
     });
-    await showModalBottomSheet(
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -1252,19 +1373,23 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
     if (!mounted) return;
     setState(() {
       _isLogModalOpen = false;
+      // If meal was saved (result == true), refresh the meal list
+      if (result == true) {
+        _refreshKey++; // This will force FutureBuilder to rebuild
+      }
     });
   }
 
   Widget _buildMacroCircle(
-    String name, 
-    int current, 
-    int target, 
+    String name,
+    int current,
+    int target,
     Color color,
     bool goalMet,
   ) {
     double progress = target > 0 ? (current / target).clamp(0.0, 1.0) : 0;
     int difference = current - target;
-    
+
     return Column(
       children: [
         Text(
@@ -1329,7 +1454,7 @@ Future<List<Map<String, dynamic>>> _fetchMealsForDate(DateTime date) async {
           Text(
             '+${difference}g',
             style: TextStyle(
-              fontSize: 12, 
+              fontSize: 12,
               color: Colors.orange,
               fontWeight: FontWeight.w600,
             ),
