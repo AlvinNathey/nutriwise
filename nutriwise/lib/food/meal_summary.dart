@@ -48,7 +48,9 @@ class FoodItem {
       return customQuantity;
     }
     return (wholeQuantity * baselineQuantity) +
-        (selectedDivision < 10 ? baselineQuantity * selectedDivision / 10.0 : 0.0);
+        (selectedDivision < 10
+            ? baselineQuantity * selectedDivision / 10.0
+            : 0.0);
   }
 
   double getMultiplier() {
@@ -96,7 +98,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   final TextEditingController _ocrCarbsController = TextEditingController();
   final TextEditingController _ocrProteinController = TextEditingController();
   final TextEditingController _ocrFatController = TextEditingController();
-  final TextEditingController _customQuantityController = TextEditingController();
+  final TextEditingController _customQuantityController =
+      TextEditingController();
 
   final ImagePicker _imagePicker = ImagePicker();
   final TextRecognizer _textRecognizer = TextRecognizer();
@@ -164,7 +167,10 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         return;
       }
 
-      final globalDoc = await _firestore.collection('barcodes').doc(food.barcode).get();
+      final globalDoc = await _firestore
+          .collection('barcodes')
+          .doc(food.barcode)
+          .get();
       if (globalDoc.exists) {
         final data = globalDoc.data();
         setState(() {
@@ -210,7 +216,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
   Future<Map<String, dynamic>?> _fetchFromOpenFoodFacts(String barcode) async {
     try {
-      final url = Uri.parse('https://world.openfoodfacts.org/api/v0/product/$barcode.json');
+      final url = Uri.parse(
+        'https://world.openfoodfacts.org/api/v0/product/$barcode.json',
+      );
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
@@ -225,8 +233,12 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             bool hasServing = false;
 
             if (product.containsKey('serving_size')) {
-              final servingStr = product['serving_size'].toString().toLowerCase();
-              final match = RegExp(r'(\d+\.?\d*)\s*(g|ml)').firstMatch(servingStr);
+              final servingStr = product['serving_size']
+                  .toString()
+                  .toLowerCase();
+              final match = RegExp(
+                r'(\d+\.?\d*)\s*(g|ml)',
+              ).firstMatch(servingStr);
               if (match != null) {
                 baselineQuantity = double.tryParse(match.group(1)!) ?? 100.0;
                 unit = match.group(2) ?? unit;
@@ -236,9 +248,12 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
             if (!hasServing && product.containsKey('quantity')) {
               final quantityStr = product['quantity'].toString().toLowerCase();
-              final match = RegExp(r'(\d+\.?\d*)\s*(g|ml)').firstMatch(quantityStr);
+              final match = RegExp(
+                r'(\d+\.?\d*)\s*(g|ml)',
+              ).firstMatch(quantityStr);
               if (match != null) {
-                baselineQuantity = double.tryParse(match.group(1)!) ?? baselineQuantity;
+                baselineQuantity =
+                    double.tryParse(match.group(1)!) ?? baselineQuantity;
                 unit = match.group(2) ?? unit;
               }
             }
@@ -252,14 +267,16 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
             double? calories, carbs, protein, fat;
             if (hasServing) {
-              calories = _parseDouble(nutriments['energy-kcal_serving']) ??
+              calories =
+                  _parseDouble(nutriments['energy-kcal_serving']) ??
                   _parseDouble(nutriments['energy_serving']);
               carbs = _parseDouble(nutriments['carbohydrates_serving']);
               protein = _parseDouble(nutriments['proteins_serving']);
               fat = _parseDouble(nutriments['fat_serving']);
             }
 
-            calories ??= _parseDouble(nutriments['energy-kcal_100g']) ??
+            calories ??=
+                _parseDouble(nutriments['energy-kcal_100g']) ??
                 _parseDouble(nutriments['energy_100g']);
             carbs ??= _parseDouble(nutriments['carbohydrates_100g']);
             protein ??= _parseDouble(nutriments['proteins_100g']);
@@ -296,7 +313,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     try {
       var scanResult = await BarcodeScanner.scan();
       String barcode = scanResult.rawContent;
-      
+
       if (barcode.isEmpty) {
         setState(() => _isScanningNewFood = false);
         _showErrorDialog('No barcode scanned.');
@@ -315,10 +332,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       String productName = await _enhancedBarcodeLookup(barcode);
 
       // Add new food item
-      final newFood = FoodItem(
-        barcode: barcode,
-        foodName: productName,
-      );
+      final newFood = FoodItem(barcode: barcode, foodName: productName);
 
       setState(() {
         _foodItems.add(newFood);
@@ -328,7 +342,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
       // Fetch nutrition data for new food
       await _fetchNutritionData(_currentFoodIndex);
-
     } catch (e) {
       setState(() => _isScanningNewFood = false);
       _showErrorDialog('Barcode scan failed: ${e.toString()}');
@@ -337,14 +350,17 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
 
   Future<String> _enhancedBarcodeLookup(String barcode) async {
     try {
-      final url = Uri.parse('https://world.openfoodfacts.org/api/v0/product/$barcode.json');
+      final url = Uri.parse(
+        'https://world.openfoodfacts.org/api/v0/product/$barcode.json',
+      );
       final response = await http.get(url).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 1 && data['product'] != null) {
           final product = data['product'];
-          final productName = product['product_name'] ??
+          final productName =
+              product['product_name'] ??
               product['product_name_en'] ??
               product['generic_name'];
 
@@ -371,7 +387,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       setState(() => _isProcessingOcr = true);
 
       final inputImage = InputImage.fromFilePath(image.path);
-      final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
+      final RecognizedText recognizedText = await _textRecognizer.processImage(
+        inputImage,
+      );
 
       final extractedData = _extractNutritionalData(recognizedText.text);
 
@@ -395,7 +413,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         });
       } else {
         setState(() => _isProcessingOcr = false);
-        _showErrorDialog('Could not extract nutritional information from the image. Please try again or enter values manually.');
+        _showErrorDialog(
+          'Could not extract nutritional information from the image. Please try again or enter values manually.',
+        );
       }
     } catch (e) {
       setState(() => _isProcessingOcr = false);
@@ -428,9 +448,12 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           if (macroMatch != null) {
             final val = double.tryParse(macroMatch.group(1)!);
             if (val != null) {
-              if (found == 0) protein = val;
-              else if (found == 1) carbs = val;
-              else if (found == 2) fat = val;
+              if (found == 0)
+                protein = val;
+              else if (found == 1)
+                carbs = val;
+              else if (found == 2)
+                fat = val;
               found++;
             }
           }
@@ -510,14 +533,17 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                   });
                   Navigator.of(context).pop();
 
-                  await _firestore.collection('barcodes').doc(_currentFood.barcode).set({
-                    'calories': _currentFood.baseCalories,
-                    'carbs': _currentFood.baseCarbs,
-                    'protein': _currentFood.baseProtein,
-                    'fat': _currentFood.baseFat,
-                    'foodName': foodName,
-                    'createdAt': FieldValue.serverTimestamp(),
-                  });
+                  await _firestore
+                      .collection('barcodes')
+                      .doc(_currentFood.barcode)
+                      .set({
+                        'calories': _currentFood.baseCalories,
+                        'carbs': _currentFood.baseCarbs,
+                        'protein': _currentFood.baseProtein,
+                        'fat': _currentFood.baseFat,
+                        'foodName': foodName,
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
                 }
               },
             ),
@@ -546,17 +572,25 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   void _saveAllFoodDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User not logged in!')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('User not logged in!')));
       return;
     }
 
     final now = DateTime.now();
-    final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final dateStr =
+        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    final timeStr =
+        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
     final weekdayStr = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ][now.weekday - 1];
 
     // Save all food items
@@ -566,19 +600,19 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           .doc(user.uid)
           .collection('barcodes')
           .add({
-        'foodName': food.foodName ?? 'Unknown Product (${food.barcode})',
-        'calories': food.getCalories(),
-        'carbs': food.getCarbs(),
-        'protein': food.getProtein(),
-        'fat': food.getFat(),
-        'quantity': food.getTotalQuantity(),
-        'unit': food.servingUnit,
-        'mealType': widget.mealType,
-        'date': dateStr,
-        'time': timeStr,
-        'weekday': weekdayStr,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+            'foodName': food.foodName ?? 'Unknown Product (${food.barcode})',
+            'calories': food.getCalories(),
+            'carbs': food.getCarbs(),
+            'protein': food.getProtein(),
+            'fat': food.getFat(),
+            'quantity': food.getTotalQuantity(),
+            'unit': food.servingUnit,
+            'mealType': widget.mealType,
+            'date': dateStr,
+            'time': timeStr,
+            'weekday': weekdayStr,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -616,7 +650,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   }
 
   void _showCustomQuantityDialog() {
-    _customQuantityController.text = _currentFood.getTotalQuantity().toStringAsFixed(1);
+    _customQuantityController.text = _currentFood
+        .getTotalQuantity()
+        .toStringAsFixed(1);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -663,6 +699,27 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     });
   }
 
+  void _removeFoodItem(int index) {
+    if (_foodItems.length <= 1) {
+      _showErrorDialog(
+        'Cannot remove the last item. Please add another item first.',
+      );
+      return;
+    }
+
+    setState(() {
+      _foodItems.removeAt(index);
+
+      // Adjust current index if needed
+      if (_currentFoodIndex >= _foodItems.length) {
+        _currentFoodIndex = _foodItems.length - 1;
+      } else if (_currentFoodIndex > index) {
+        // If we removed an item before the current one, adjust index
+        _currentFoodIndex--;
+      }
+    });
+  }
+
   String _getQuantityDisplay() {
     if (_currentFood.wholeQuantity == 0) {
       double fraction = _currentFood.selectedDivision / 10.0;
@@ -670,15 +727,20 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       if (fraction == 0.25) return '¼';
       if (fraction == 0.75) return '¾';
       return fraction.toString();
-    } else if (_currentFood.selectedDivision == 10 || _currentFood.selectedDivision == 0) {
+    } else if (_currentFood.selectedDivision == 10 ||
+        _currentFood.selectedDivision == 0) {
       return _currentFood.wholeQuantity.toString();
     } else {
       double fraction = _currentFood.selectedDivision / 10.0;
       String fractionStr = '';
-      if (fraction == 0.5) fractionStr = '½';
-      else if (fraction == 0.25) fractionStr = '¼';
-      else if (fraction == 0.75) fractionStr = '¾';
-      else fractionStr = '($fraction)';
+      if (fraction == 0.5)
+        fractionStr = '½';
+      else if (fraction == 0.25)
+        fractionStr = '¼';
+      else if (fraction == 0.75)
+        fractionStr = '¾';
+      else
+        fractionStr = '($fraction)';
       return '${_currentFood.wholeQuantity} $fractionStr';
     }
   }
@@ -686,10 +748,18 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final dateStr =
+        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+    final timeStr =
+        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
     final weekdayStr = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ][now.weekday - 1];
 
     if (_showOcrReview) {
@@ -699,7 +769,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text('${widget.mealType} - ${_foodItems.length} item${_foodItems.length > 1 ? "s" : ""}'),
+        title: Text(
+          '${widget.mealType} - ${_foodItems.length} item${_foodItems.length > 1 ? "s" : ""}',
+        ),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
         leading: IconButton(
@@ -720,8 +792,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     _isProcessingOcr
                         ? 'Processing image...'
                         : _isScanningNewFood
-                            ? 'Scanning barcode...'
-                            : 'Loading...',
+                        ? 'Scanning barcode...'
+                        : 'Loading...',
                     style: const TextStyle(fontSize: 16),
                   ),
                 ],
@@ -810,7 +882,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                       border: Border.all(color: Colors.green[300]!),
                     ),
                     child: Text(
-                      _currentFood.foodName ?? 'Unknown Product (${_currentFood.barcode})',
+                      _currentFood.foodName ??
+                          'Unknown Product (${_currentFood.barcode})',
                       style: const TextStyle(fontSize: 18, color: Colors.black),
                     ),
                   ),
@@ -860,8 +933,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                           ),
                         ),
                         child: Text(
-                          _foodItems.length > 1 
-                              ? 'Save All ${_foodItems.length} Items' 
+                          _foodItems.length > 1
+                              ? 'Save All ${_foodItems.length} Items'
                               : 'Save & Continue',
                           style: const TextStyle(
                             fontSize: 18,
@@ -886,7 +959,10 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                         children: [
                           Row(
                             children: [
-                              Icon(Icons.info_outline, color: Colors.orange[700]),
+                              Icon(
+                                Icons.info_outline,
+                                color: Colors.orange[700],
+                              ),
                               const SizedBox(width: 12),
                               const Expanded(
                                 child: Text(
@@ -899,7 +975,10 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                           const SizedBox(height: 16),
                           const Text(
                             'Take a photo of the nutritional information on the package to extract the details.',
-                            style: TextStyle(color: Colors.black87, fontSize: 14),
+                            style: TextStyle(
+                              color: Colors.black87,
+                              fontSize: 14,
+                            ),
                             textAlign: TextAlign.center,
                           ),
                         ],
@@ -1010,7 +1089,6 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         children: [
           Row(
             children: [
-            
               const SizedBox(width: 8),
               const Text(
                 'Total Nutritional Summary',
@@ -1036,8 +1114,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                       style: TextStyle(
                         fontSize: 14,
                         color: Colors.grey[800],
-                        fontWeight: index == _currentFoodIndex 
-                            ? FontWeight.bold 
+                        fontWeight: index == _currentFoodIndex
+                            ? FontWeight.bold
                             : FontWeight.normal,
                       ),
                     ),
@@ -1070,7 +1148,12 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     );
   }
 
-  Widget _buildSummaryItem(String label, double value, String unit, Color color) {
+  Widget _buildSummaryItem(
+    String label,
+    double value,
+    String unit,
+    Color color,
+  ) {
     return Column(
       children: [
         Text(
@@ -1090,13 +1173,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             color: color,
           ),
         ),
-        Text(
-          unit,
-          style: TextStyle(
-            fontSize: 11,
-            color: Colors.grey[600],
-          ),
-        ),
+        Text(unit, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
       ],
     );
   }
@@ -1110,42 +1187,75 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         itemBuilder: (context, index) {
           final isSelected = index == _currentFoodIndex;
           final food = _foodItems[index];
-          return GestureDetector(
-            onTap: () {
-              setState(() {
-                _currentFoodIndex = index;
-              });
-            },
-            child: Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.green : Colors.white,
-                borderRadius: BorderRadius.circular(25),
-                border: Border.all(
-                  color: isSelected ? Colors.green : Colors.grey[300]!,
-                  width: 2,
-                ),
+          final foodName = food.foodName ?? 'Unknown Product (${food.barcode})';
+          final displayName = foodName.length > 20
+              ? '${foodName.substring(0, 20)}...'
+              : foodName;
+
+          return Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isSelected ? Colors.green : Colors.white,
+              borderRadius: BorderRadius.circular(25),
+              border: Border.all(
+                color: isSelected ? Colors.green : Colors.grey[300]!,
+                width: 2,
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    'Item ${index + 1}',
-                    style: TextStyle(
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _currentFoodIndex = index;
+                    });
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!food.hasNutritionData)
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 14,
+                          color: isSelected ? Colors.white : Colors.orange,
+                        ),
+                      if (!food.hasNutritionData) const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.black87,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: () => _removeFoodItem(index),
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? Colors.white.withOpacity(0.3)
+                          : Colors.grey[300],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close,
+                      size: 16,
                       color: isSelected ? Colors.white : Colors.black87,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
                     ),
                   ),
-                  if (!food.hasNutritionData)
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      size: 14,
-                      color: isSelected ? Colors.white : Colors.orange,
-                    ),
-                ],
-              ),
+                ),
+              ],
             ),
           );
         },
@@ -1189,7 +1299,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     ),
                     if (_currentFood.isCustomQuantity)
                       IconButton(
-                        icon: const Icon(Icons.clear, size: 18, color: Colors.red),
+                        icon: const Icon(
+                          Icons.clear,
+                          size: 18,
+                          color: Colors.red,
+                        ),
                         onPressed: _clearCustomQuantity,
                         tooltip: 'Clear custom quantity',
                       ),
@@ -1227,7 +1341,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     setState(() {
                       if (_currentFood.wholeQuantity > 0) {
                         _currentFood.wholeQuantity--;
-                        if (_currentFood.wholeQuantity == 0 && _currentFood.selectedDivision == 10) {
+                        if (_currentFood.wholeQuantity == 0 &&
+                            _currentFood.selectedDivision == 10) {
                           _currentFood.selectedDivision = 0;
                         }
                       }
@@ -1278,7 +1393,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     onTap: () {
                       setState(() {
                         _currentFood.selectedDivision = index + 1;
-                        if (_currentFood.wholeQuantity == 0 && _currentFood.selectedDivision == 10) {
+                        if (_currentFood.wholeQuantity == 0 &&
+                            _currentFood.selectedDivision == 10) {
                           _currentFood.wholeQuantity = 1;
                         }
                       });
@@ -1301,10 +1417,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             Center(
               child: Text(
                 '${_currentFood.selectedDivision}/10 portions',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
               ),
             ),
           ],
@@ -1335,10 +1448,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           const SizedBox(height: 4),
           Text(
             'Per ${_currentFood.getTotalQuantity().toStringAsFixed(0)}${_currentFood.servingUnit}',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-            ),
+            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
           ),
           const SizedBox(height: 16),
           _buildNutritionRow(
@@ -1387,10 +1497,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             Container(
               width: 8,
               height: 8,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 12),
             Text(
@@ -1423,10 +1530,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               const SizedBox(width: 4),
               Text(
                 unit,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
               ),
             ],
           ),
@@ -1483,9 +1587,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             const Text(
               'Nutritional Information (per 100g/ml)',
               style: TextStyle(
@@ -1494,9 +1598,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 color: Colors.black,
               ),
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             _buildOcrEditField(
               'Calories',
               _ocrCaloriesController,
@@ -1504,9 +1608,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               Icons.local_fire_department,
               Colors.orange,
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             _buildOcrEditField(
               'Carbohydrates',
               _ocrCarbsController,
@@ -1514,9 +1618,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               Icons.grain,
               Colors.blue,
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             _buildOcrEditField(
               'Protein',
               _ocrProteinController,
@@ -1524,9 +1628,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               Icons.egg,
               Colors.red,
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             _buildOcrEditField(
               'Fat',
               _ocrFatController,
@@ -1534,9 +1638,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               Icons.water_drop,
               Colors.yellow[700]!,
             ),
-            
+
             const SizedBox(height: 32),
-            
+
             SizedBox(
               width: double.infinity,
               height: 56,
@@ -1604,7 +1708,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 const SizedBox(height: 4),
                 TextField(
                   controller: controller,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
                   ],

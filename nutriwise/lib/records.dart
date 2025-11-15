@@ -2869,6 +2869,7 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
       ),
     );
   }
+
   pw.Widget _buildPDFMealDetailsTable() {
     final mealsDetails =
         _reportData['mealsDetails'] as List<Map<String, dynamic>>;
@@ -4279,11 +4280,18 @@ class MealDetailPage extends StatelessWidget {
           double totalCarbs = 0;
           double totalFat = 0;
           for (var macro in meals) {
-            totalCalories += (macro['calories'] ?? 0).toDouble();
-            totalProtein += (macro['protein'] ?? 0).toDouble();
-            totalCarbs += (macro['carbohydrate'] ?? macro['carbs'] ?? 0)
+            // Handle both barcode and meal field names
+            totalCalories += (macro['calories'] ?? macro['totalCalories'] ?? 0)
                 .toDouble();
-            totalFat += (macro['fat'] ?? 0).toDouble();
+            totalProtein += (macro['protein'] ?? macro['totalProtein'] ?? 0)
+                .toDouble();
+            totalCarbs +=
+                (macro['carbohydrate'] ??
+                        macro['carbs'] ??
+                        macro['totalCarbs'] ??
+                        0)
+                    .toDouble();
+            totalFat += (macro['fat'] ?? macro['totalFat'] ?? 0).toDouble();
           }
           final totalMacros = totalProtein + totalCarbs + totalFat;
           final List<PieChartSectionData> macroSections = [
@@ -4325,69 +4333,97 @@ class MealDetailPage extends StatelessWidget {
             elevation: 2,
             margin: const EdgeInsets.only(bottom: 20),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    type,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 120,
-                    child: totalMacros > 0
-                        ? PieChart(
-                            PieChartData(
-                              sections: macroSections,
-                              centerSpaceRadius: 30,
-                              sectionsSpace: 2,
-                            ),
-                          )
-                        : Center(
-                            child: Text(
-                              'No macro data for $type.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ),
-                  ),
-                  const SizedBox(height: 10),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(
-                        child: _buildMacroColumn(
-                          'Calories',
-                          totalCalories,
-                          Colors.red,
+                      Text(
+                        type,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
                         ),
                       ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${meals.length} meal${meals.length != 1 ? 's' : ''}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.green[700],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  // Pie Chart
+                  Center(
+                    child: SizedBox(
+                      height: 150,
+                      width: 150,
+                      child: totalMacros > 0
+                          ? PieChart(
+                              PieChartData(
+                                sections: macroSections,
+                                centerSpaceRadius: 40,
+                                sectionsSpace: 2,
+                              ),
+                            )
+                          : Center(
+                              child: Text(
+                                'No macro data',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // Calories - Full width, prominent
+                  _buildCaloriesCard(totalCalories),
+                  const SizedBox(height: 16),
+                  // Macros in horizontal row
+                  Row(
+                    children: [
                       Expanded(
-                        child: _buildMacroColumn(
+                        child: _buildMacroCard(
                           'Protein',
                           totalProtein,
                           Colors.blue,
+                          Icons.fitness_center,
                         ),
                       ),
+                      const SizedBox(width: 12),
                       Expanded(
-                        child: _buildMacroColumn(
+                        child: _buildMacroCard(
                           'Carbs',
                           totalCarbs,
                           Colors.green,
+                          Icons.grain,
                         ),
                       ),
+                      const SizedBox(width: 12),
                       Expanded(
-                        child: _buildMacroColumn(
+                        child: _buildMacroCard(
                           'Fat',
                           totalFat,
                           Colors.orange,
+                          Icons.opacity,
                         ),
                       ),
                     ],
@@ -4401,31 +4437,104 @@ class MealDetailPage extends StatelessWidget {
     );
   }
 
-  Widget _buildMacroColumn(String label, double value, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(fontSize: 14, color: Colors.black54)),
-        const SizedBox(height: 4),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Center(
-            child: Text(
-              value.toStringAsFixed(1),
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: color,
+  Widget _buildCaloriesCard(double calories) {
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.red.withOpacity(0.3), width: 1),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Total Calories',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w500,
+                ),
               ),
+              const SizedBox(height: 4),
+              Text(
+                calories.toStringAsFixed(0),
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red.shade700,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            'kcal',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMacroCard(
+    String label,
+    double value,
+    Color color,
+    IconData icon,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                value.toStringAsFixed(1),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  'g',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
