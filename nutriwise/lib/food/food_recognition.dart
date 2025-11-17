@@ -1885,20 +1885,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final calorieDb = {
-        'Bhaji': 120,
-        'Chapati': 140,
-        'Githeri': 180,
-        'Kachumbari': 45,
-        'Kuku Choma': 165,
-        'Mandazi': 160,
-        'Masala Chips': 280,
-        'Matoke': 150,
-        'Mukimo': 170,
-        'Nyama Choma': 250,
-        'Pilau': 220,
-        'Sukuma Wiki': 45,
-        'Ugali': 180,
-      };
+  'Bhaji': 161,
+  'Chapati': 297,
+  'Githeri': 83,
+  'Kachumbari': 53,
+  'Kuku Choma': 165,
+  'Mandazi': 320,
+  'Masala Chips': 333,
+  'Matoke': 116,
+  'Mukimo': 80,
+  'Nyama Choma': 233,
+  'Pilau': 165,
+  'Sukuma Wiki': 35,
+  'Ugali': 360,
+};
+
       return calorieDb[foodName] ?? 150;
     }
 
@@ -1909,45 +1910,45 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
 
     // Static fallback for non-Kenyan foods (will be replaced by API data)
-    final fallbackDb = {
-      'Rice': 206,
-      'Chicken': 165,
-      'Beef': 250,
-      'Fish': 120,
-      'Beans': 127,
-      'Pizza': 266,
-      'Hamburger': 295,
-      'Salad': 50,
-      'Soup': 80,
-      'Bread': 265,
-      'Noodles': 138,
-      'Curry': 195,
-      'Steak': 271,
-      'Sushi': 143,
-      'Pasta': 131,
-      'Sandwich': 200,
-      'Fries': 312,
-      'Apple Pie': 237,
-      'Cheesecake': 321,
-      'Chocolate Cake': 352,
-      'Ice Cream': 207,
-      'Pancakes': 227,
-      'Waffles': 291,
-      'Donuts': 452,
-      'French Toast': 202,
-      'Fried Rice': 228,
-      'Grilled Salmon': 206,
-      'Chicken Curry': 195,
-      'Miso Soup': 40,
-      'Ramen': 436,
-      'Spaghetti Bolognese': 195,
-      'Caesar Salad': 184,
-      'Greek Salad': 107,
-      'Club Sandwich': 280,
-      'Hot Dog': 290,
-      'Tacos': 226,
-      'Nachos': 346,
-    };
+   final fallbackDb = {
+  'Rice': 130,
+  'Chicken': 165,
+  'Beef': 250,
+  'Fish': 120,
+  'Beans': 127,
+  'Pizza': 276,
+  'Hamburger': 295,
+  'Salad': 17,
+  'Soup': 50,
+  'Bread': 265,
+  'Noodles': 138,
+  'Curry': 195,
+  'Steak': 271,
+  'Sushi': 143,
+  'Pasta': 131,
+  'Sandwich': 250,
+  'Fries': 312,
+  'Apple Pie': 237,
+  'Cheesecake': 321,
+  'Chocolate Cake': 352,
+  'Ice Cream': 207,
+  'Pancakes': 227,
+  'Waffles': 291,
+  'Donuts': 452,
+  'French Toast': 202,
+  'Fried Rice': 228,
+  'Grilled Salmon': 206,
+  'Chicken Curry': 195,
+  'Miso Soup': 40,
+  'Ramen': 436,
+  'Spaghetti Bolognese': 195,
+  'Caesar Salad': 184,
+  'Greek Salad': 107,
+  'Club Sandwich': 280,
+  'Hot Dog': 290,
+  'Tacos': 226,
+  'Nachos': 346,
+};
 
     final calories = fallbackDb[foodName] ?? 150;
 
@@ -1967,16 +1968,20 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final macroDb = {
-        'Ugali': {'carbs': 40, 'protein': 3, 'fat': 1},
-        'Sukuma Wiki': {'carbs': 7, 'protein': 3, 'fat': 1},
-        'Chapati': {'carbs': 28, 'protein': 4, 'fat': 3},
-        'Pilau': {'carbs': 38, 'protein': 8, 'fat': 6},
-        'Nyama Choma': {'carbs': 0, 'protein': 26, 'fat': 15},
-        'Githeri': {'carbs': 32, 'protein': 8, 'fat': 2},
-        'Mukimo': {'carbs': 30, 'protein': 5, 'fat': 2},
-        'Mandazi': {'carbs': 28, 'protein': 3, 'fat': 5},
-      };
-      return macroDb[foodName] ?? {'carbs': 30, 'protein': 10, 'fat': 5};
+  'Ugali': {'carbs': 76.5, 'protein': 6.9, 'fat': 3.8},
+  'Sukuma Wiki': {'carbs': 3.8, 'protein': 2.5, 'fat': 3.2},
+  'Chapati': {'carbs': 46.1, 'protein': 7.9, 'fat': 9.0},
+  'Pilau': {'carbs': 24.8, 'protein': 6.9, 'fat': 9.4},
+  'Nyama Choma': {'carbs': 0, 'protein': 28, 'fat': 12},
+  'Githeri': {'carbs': 19.7, 'protein': 6.7, 'fat': 4.2},
+  'Mukimo': {'carbs': 20.5, 'protein': 5.0, 'fat': 0.7},
+  'Mandazi': {'carbs': 40.0, 'protein': 5.0, 'fat': 15.0},
+};
+      final macros = macroDb[foodName];
+      if (macros != null) {
+        return macros.map((k, v) => MapEntry(k, v.round()));
+      }
+      return {'carbs': 30, 'protein': 10, 'fat': 5};
     }
 
     // For non-Kenyan foods, check API cache first, then use static fallback
@@ -1987,21 +1992,22 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
 
     // Static fallback for non-Kenyan foods (will be replaced by API data)
     final fallbackDb = {
-      'Rice': {'carbs': 45, 'protein': 4, 'fat': 0},
-      'Chicken': {'carbs': 0, 'protein': 31, 'fat': 3},
-      'Beef': {'carbs': 0, 'protein': 26, 'fat': 17},
-      'Fish': {'carbs': 0, 'protein': 22, 'fat': 1},
-      'Beans': {'carbs': 22, 'protein': 8, 'fat': 0},
-      'Pizza': {'carbs': 33, 'protein': 11, 'fat': 10},
-      'Hamburger': {'carbs': 30, 'protein': 17, 'fat': 13},
-      'Salad': {'carbs': 10, 'protein': 2, 'fat': 0},
-      'Grilled Salmon': {'carbs': 0, 'protein': 25, 'fat': 12},
-      'Chicken Curry': {'carbs': 18, 'protein': 20, 'fat': 8},
-      'Fried Rice': {'carbs': 42, 'protein': 6, 'fat': 5},
-      'Miso Soup': {'carbs': 6, 'protein': 2, 'fat': 1},
-      'Caesar Salad': {'carbs': 8, 'protein': 12, 'fat': 12},
-      'Spaghetti Bolognese': {'carbs': 28, 'protein': 12, 'fat': 5},
-    };
+  'Rice': {'carbs': 28, 'protein': 2.7, 'fat': 0.3},
+  'Chicken': {'carbs': 0, 'protein': 31, 'fat': 3.6},
+  'Beef': {'carbs': 0, 'protein': 26, 'fat': 15},
+  'Fish': {'carbs': 0, 'protein': 20, 'fat': 1.5},
+  'Beans': {'carbs': 25, 'protein': 8.7, 'fat': 0.5},
+  'Pizza': {'carbs': 27, 'protein': 10, 'fat': 11.5},
+  'Hamburger': {'carbs': 23, 'protein': 16.5, 'fat': 16.7},
+  'Salad': {'carbs': 4, 'protein': 1, 'fat': 0.2},
+  'Grilled Salmon': {'carbs': 0, 'protein': 25, 'fat': 13},
+  'Chicken Curry': {'carbs': 15, 'protein': 18, 'fat': 9},
+  'Fried Rice': {'carbs': 36, 'protein': 6, 'fat': 5.5},
+  'Miso Soup': {'carbs': 3.6, 'protein': 2, 'fat': 1},
+  'Caesar Salad': {'carbs': 4, 'protein': 3.5, 'fat': 8},
+  'Spaghetti Bolognese': {'carbs': 21, 'protein': 7.5, 'fat': 5.5},
+};
+
 
     final macros =
         fallbackDb[foodName] ?? {'carbs': 30, 'protein': 10, 'fat': 5};
@@ -2011,7 +2017,8 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       print('Info: Using default macros for unknown food: $foodName');
     }
 
-    return macros;
+    // Ensure all values are int
+    return macros.map((k, v) => MapEntry(k, v.round()));
   }
 
   /// Fetch nutrition data from API for all predictions (async)
@@ -3869,8 +3876,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                         labelText: 'Carbs (g)',
                         border: OutlineInputBorder(),
                         isDense: true,
+                        hintText: '0.4',
                       ),
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -3881,8 +3891,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                         labelText: 'Protein (g)',
                         border: OutlineInputBorder(),
                         isDense: true,
+                        hintText: '0.2',
                       ),
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -3893,8 +3906,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                         labelText: 'Fat (g)',
                         border: OutlineInputBorder(),
                         isDense: true,
+                        hintText: '0',
                       ),
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                     ),
                   ),
                 ],
@@ -3918,9 +3934,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
               // Parse values with validation
               final grams = int.tryParse(_gramsController.text) ?? 100;
               final calories = int.tryParse(_caloriesController.text) ?? 150;
-              final carbs = int.tryParse(_carbsController.text) ?? 30;
-              final protein = int.tryParse(_proteinController.text) ?? 10;
-              final fat = int.tryParse(_fatController.text) ?? 5;
+              // Parse macros as doubles first to handle decimal values (e.g., 0.4, 0.2)
+              // For manual food entry, use the exact value entered (rounded to int for storage)
+              // If empty, default to 0 (not 30/10/5) to allow low-macro foods
+              final carbsText = _carbsController.text.trim();
+              final carbs = carbsText.isEmpty
+                  ? 0
+                  : (double.tryParse(carbsText) ?? 0.0).round();
+              final proteinText = _proteinController.text.trim();
+              final protein = proteinText.isEmpty
+                  ? 0
+                  : (double.tryParse(proteinText) ?? 0.0).round();
+              final fatText = _fatController.text.trim();
+              final fat = fatText.isEmpty
+                  ? 0
+                  : (double.tryParse(fatText) ?? 0.0).round();
 
               // Validate grams
               final validGrams = grams.clamp(

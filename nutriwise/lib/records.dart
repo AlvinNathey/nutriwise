@@ -1724,16 +1724,17 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
                     ),
                   ),
                 ],
-              ),
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'No meal data',
-                  style: TextStyle(color: Colors.grey[600]),
+              )
+            else
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'No meal data',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -2251,31 +2252,71 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     try {
       final pdf = pw.Document();
 
+      // Build main content (summary sections)
+      final mainContent = [
+        _buildPDFHeader(),
+        pw.SizedBox(height: 20),
+        _buildPDFSummary(),
+        pw.SizedBox(height: 20),
+        _buildPDFMacronutrients(),
+        pw.SizedBox(height: 20),
+        _buildPDFMealDistribution(),
+        pw.SizedBox(height: 20),
+        _buildPDFWeightTracking(),
+        pw.SizedBox(height: 20),
+        _buildPDFDailyCalories(),
+        pw.SizedBox(height: 20),
+        _buildPDFTopMeals(),
+        pw.SizedBox(height: 20),
+      ];
+
+      // Add main content page
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
           margin: const pw.EdgeInsets.all(32),
-          build: (context) => [
-            _buildPDFHeader(),
-            pw.SizedBox(height: 20),
-            _buildPDFSummary(),
-            pw.SizedBox(height: 20),
-            _buildPDFMacronutrients(),
-            pw.SizedBox(height: 20),
-            _buildPDFMealDistribution(),
-            pw.SizedBox(height: 20),
-            _buildPDFWeightTracking(),
-            pw.SizedBox(height: 20),
-            _buildPDFDailyCalories(),
-            pw.SizedBox(height: 20),
-            _buildPDFTopMeals(),
-            pw.SizedBox(height: 20),
-            _buildPDFMealDetailsTable(),
-            pw.SizedBox(height: 30),
-            _buildPDFFooter(),
-          ],
+          maxPages: 100, // Set high limit for main content
+          build: (context) => [...mainContent, _buildPDFFooter()],
         ),
       );
+
+      // Handle meal details table separately to avoid page limit issues
+      final mealsDetails =
+          _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+      if (mealsDetails.isNotEmpty) {
+        // Limit to 200 meals to prevent excessive pages (reduced from 500)
+        final limitedMeals = mealsDetails.length > 200
+            ? mealsDetails.sublist(0, 200)
+            : mealsDetails;
+
+        // Split meals into chunks of 20 per page to ensure they fit
+        const mealsPerPage = 20;
+        for (int i = 0; i < limitedMeals.length; i += mealsPerPage) {
+          final chunk = limitedMeals.sublist(
+            i,
+            i + mealsPerPage > limitedMeals.length
+                ? limitedMeals.length
+                : i + mealsPerPage,
+          );
+          final isLastPage = i + chunk.length >= limitedMeals.length;
+
+          pdf.addPage(
+            pw.Page(
+              pageFormat: PdfPageFormat.a4,
+              margin: const pw.EdgeInsets.all(32),
+              build: (context) => _buildPDFMealDetailsTableForChunk(
+                chunk,
+                i == 0, // Show header only on first page
+                isLastPage, // Show footer on last page
+                mealsDetails.length > 200, // Show note if limited
+                isLastPage
+                    ? mealsDetails.length
+                    : null, // Total count on last page if limited
+              ),
+            ),
+          );
+        }
+      }
 
       await Printing.layoutPdf(
         onLayout: (PdfPageFormat format) async => pdf.save(),
@@ -2966,6 +3007,122 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               }),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPDFMealDetailsTableForChunk(
+    List<Map<String, dynamic>> mealsChunk,
+    bool showHeader,
+    bool showFooter,
+    bool isLimited,
+    int? totalMealsCount,
+  ) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(16),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          if (showHeader) ...[
+            pw.Text(
+              'All Meals Details${isLimited ? ' (First 200 meals)' : ''}',
+              style: pw.TextStyle(
+                fontSize: 16,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.green700,
+              ),
+            ),
+            pw.SizedBox(height: 12),
+          ],
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(3),
+              1: const pw.FlexColumnWidth(1.5),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(1),
+              4: const pw.FlexColumnWidth(1),
+              5: const pw.FlexColumnWidth(1),
+              6: const pw.FlexColumnWidth(1),
+            },
+            children: [
+              if (showHeader)
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  children: [
+                    _buildPDFTableCell('Food Names', isHeader: true),
+                    _buildPDFTableCell('Type', isHeader: true),
+                    _buildPDFTableCell('Date', isHeader: true),
+                    _buildPDFTableCell('Created At', isHeader: true),
+                    _buildPDFTableCell('Calories', isHeader: true),
+                    _buildPDFTableCell('Protein', isHeader: true),
+                    _buildPDFTableCell('Carbs', isHeader: true),
+                    _buildPDFTableCell('Fat', isHeader: true),
+                  ],
+                ),
+              ...mealsChunk.map((meal) {
+                // CreatedAt
+                String createdAtStr = '';
+                if (meal['date'] != null && meal['date'] is DateTime) {
+                  createdAtStr = DateFormat(
+                    'yyyy-MM-dd HH:mm',
+                  ).format(meal['date'] as DateTime);
+                } else if (meal['createdAt'] != null &&
+                    meal['createdAt'] is DateTime) {
+                  createdAtStr = DateFormat(
+                    'yyyy-MM-dd HH:mm',
+                  ).format(meal['createdAt'] as DateTime);
+                }
+                return pw.TableRow(
+                  children: [
+                    _buildPDFTableCell(meal['name'] as String),
+                    _buildPDFTableCell(meal['mealType'] as String),
+                    _buildPDFTableCell(
+                      meal['date'] is DateTime
+                          ? DateFormat('MM/dd').format(meal['date'] as DateTime)
+                          : '',
+                    ),
+                    _buildPDFTableCell(createdAtStr),
+                    _buildPDFTableCell(
+                      '${(meal['calories'] as double).toStringAsFixed(0)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['protein'] as double).toStringAsFixed(1)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['carbs'] as double).toStringAsFixed(1)}',
+                    ),
+                    _buildPDFTableCell(
+                      '${(meal['fat'] as double).toStringAsFixed(1)}',
+                    ),
+                  ],
+                );
+              }),
+            ],
+          ),
+          if (isLimited && totalMealsCount != null && showFooter) ...[
+            pw.SizedBox(height: 16),
+            pw.Container(
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.orange50,
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Text(
+                'Note: Only the first 200 meals are shown in the details table. Total meals: $totalMealsCount',
+                style: const pw.TextStyle(
+                  fontSize: 11,
+                  color: PdfColors.orange700,
+                ),
+              ),
+            ),
+          ],
+          if (showFooter) ...[pw.SizedBox(height: 30), _buildPDFFooter()],
         ],
       ),
     );
