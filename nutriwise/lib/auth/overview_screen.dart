@@ -29,14 +29,14 @@ class _OverviewScreenState extends State<OverviewScreen>
       icon: Icons.analytics,
       title: "Track Your Nutrition",
       description:
-          "Log your meals and track calories, macros, and micronutrients with an easy-to-use food diary.",
+          "Log your meals and track calories, and macronutrients with an easy-to-use food diary.",
       gradient: [Color(0xFF2196F3), Color(0xFF64B5F6), Color(0xFF90CAF9)],
     ),
     _PageData(
       icon: Icons.fitness_center,
       title: "Achieve Your Goals",
       description:
-          "Stay motivated with progress tracking and reminders designed to help you reach your fitness and health objectives.",
+          "Stay motivated with progress tracking designed to help you reach your fitness and health objectives.",
       gradient: [Color(0xFFFF9800), Color(0xFFFFB74D), Color(0xFFFFCC80)],
     ),
   ];

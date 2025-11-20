@@ -39,6 +39,9 @@ const int kMaxFoodSuggestions = 12;
 /// Minimum confidence threshold for food suggestions (lower = more variety)
 const double kMinSuggestionConfidence = 0.15;
 
+/// Minimum confidence shown on meal summary UI elements
+const double kMealSummaryDisplayConfidenceThreshold = 0.55;
+
 /// Model loading retry attempts
 const int kModelLoadRetryAttempts = 3;
 
@@ -620,6 +623,23 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   late Animation<double> _carbsAnimation;
   late Animation<double> _proteinAnimation;
   late Animation<double> _fatAnimation;
+
+  List<int> get _mealSummaryDisplayIndices {
+    return List<int>.generate(_segmentedFoods.length, (index) => index)
+        .where(
+          (index) =>
+              _segmentedFoods[index].confidence >=
+              kMealSummaryDisplayConfidenceThreshold,
+        )
+        .toList();
+  }
+
+  List<SegmentedFood> get _mealSummaryDisplayFoods => _mealSummaryDisplayIndices
+      .map((index) => _segmentedFoods[index])
+      .toList();
+
+  int get _hiddenFoodCount =>
+      _segmentedFoods.length - _mealSummaryDisplayIndices.length;
 
   @override
   void initState() {
@@ -1885,20 +1905,29 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final calorieDb = {
-  'Bhaji': 161,
-  'Chapati': 297,
-  'Githeri': 83,
-  'Kachumbari': 53,
-  'Kuku Choma': 165,
-  'Mandazi': 320,
-  'Masala Chips': 333,
-  'Matoke': 116,
-  'Mukimo': 80,
-  'Nyama Choma': 233,
-  'Pilau': 165,
-  'Sukuma Wiki': 35,
-  'Ugali': 360,
-};
+        'Bhaji':
+            170, // Adjusted up from 161: Fried spinach bhaji often higher due to oil (sources: CalorieKing ~82 for light, but Kenyan-style with oil ~150-200; macro calc ~164)
+        'Chapati': 297, // Accurate (FatSecret/USDA: 264-299)
+        'Githeri':
+            140, // Corrected up from 83: Boiled maize/beans ~120-150 (SparkRecipes ~77 per ~100g serving; SnapCalorie ~144; macro calc ~144)
+        'Kachumbari':
+            53, // Accurate (Healthier Steps: 53; other sources 50-60 for raw salad)
+        'Kuku Choma':
+            190, // Adjusted up from 165: Grilled chicken (skin-on) ~165-220 (macro calc ~191; similar to goat choma ~144-190)
+        'Mandazi': 320, // Accurate (Fitia/SnapCalorie: 319-320)
+        'Masala Chips':
+            333, // Accurate (macro calc ~333; fried chips with masala sauce ~300-350)
+        'Matoke': 116, // Accurate (macro calc ~116; boiled plantains ~89-140)
+        'Mukimo':
+            80, // Accurate (macro calc ~80; mashed peas/potato/greens ~80-100)
+        'Nyama Choma':
+            233, // Accurate (macro calc ~233; grilled goat/beef ~200-250)
+        'Pilau':
+            165, // Accurate (M&S/CalorieKing: 135-156; Kenyan meaty version ~165)
+        'Sukuma Wiki':
+            35, // Accurate (Swahili Village: ~35; light greens ~25-50)
+        'Ugali': 360, // Accurate (MyFoodData: 360)
+      };
 
       return calorieDb[foodName] ?? 150;
     }
@@ -1910,45 +1939,45 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
 
     // Static fallback for non-Kenyan foods (will be replaced by API data)
-   final fallbackDb = {
-  'Rice': 130,
-  'Chicken': 165,
-  'Beef': 250,
-  'Fish': 120,
-  'Beans': 127,
-  'Pizza': 276,
-  'Hamburger': 295,
-  'Salad': 17,
-  'Soup': 50,
-  'Bread': 265,
-  'Noodles': 138,
-  'Curry': 195,
-  'Steak': 271,
-  'Sushi': 143,
-  'Pasta': 131,
-  'Sandwich': 250,
-  'Fries': 312,
-  'Apple Pie': 237,
-  'Cheesecake': 321,
-  'Chocolate Cake': 352,
-  'Ice Cream': 207,
-  'Pancakes': 227,
-  'Waffles': 291,
-  'Donuts': 452,
-  'French Toast': 202,
-  'Fried Rice': 228,
-  'Grilled Salmon': 206,
-  'Chicken Curry': 195,
-  'Miso Soup': 40,
-  'Ramen': 436,
-  'Spaghetti Bolognese': 195,
-  'Caesar Salad': 184,
-  'Greek Salad': 107,
-  'Club Sandwich': 280,
-  'Hot Dog': 290,
-  'Tacos': 226,
-  'Nachos': 346,
-};
+    final fallbackDb = {
+      'Rice': 130,
+      'Chicken': 165,
+      'Beef': 250,
+      'Fish': 120,
+      'Beans': 127,
+      'Pizza': 276,
+      'Hamburger': 295,
+      'Salad': 17,
+      'Soup': 50,
+      'Bread': 265,
+      'Noodles': 138,
+      'Curry': 195,
+      'Steak': 271,
+      'Sushi': 143,
+      'Pasta': 131,
+      'Sandwich': 250,
+      'Fries': 312,
+      'Apple Pie': 237,
+      'Cheesecake': 321,
+      'Chocolate Cake': 352,
+      'Ice Cream': 207,
+      'Pancakes': 227,
+      'Waffles': 291,
+      'Donuts': 452,
+      'French Toast': 202,
+      'Fried Rice': 228,
+      'Grilled Salmon': 206,
+      'Chicken Curry': 195,
+      'Miso Soup': 40,
+      'Ramen': 436,
+      'Spaghetti Bolognese': 195,
+      'Caesar Salad': 184,
+      'Greek Salad': 107,
+      'Club Sandwich': 280,
+      'Hot Dog': 290,
+      'Tacos': 226,
+      'Nachos': 346,
+    };
 
     final calories = fallbackDb[foodName] ?? 150;
 
@@ -1968,15 +1997,42 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     // Check if it's a Kenyan food - use static database
     if (_kenyanFoods.contains(foodName)) {
       final macroDb = {
-  'Ugali': {'carbs': 76.5, 'protein': 6.9, 'fat': 3.8},
-  'Sukuma Wiki': {'carbs': 3.8, 'protein': 2.5, 'fat': 3.2},
-  'Chapati': {'carbs': 46.1, 'protein': 7.9, 'fat': 9.0},
-  'Pilau': {'carbs': 24.8, 'protein': 6.9, 'fat': 9.4},
-  'Nyama Choma': {'carbs': 0, 'protein': 28, 'fat': 12},
-  'Githeri': {'carbs': 19.7, 'protein': 6.7, 'fat': 4.2},
-  'Mukimo': {'carbs': 20.5, 'protein': 5.0, 'fat': 0.7},
-  'Mandazi': {'carbs': 40.0, 'protein': 5.0, 'fat': 15.0},
-};
+        'Ugali': {'carbs': 76.5, 'protein': 6.9, 'fat': 3.8},
+        'Sukuma Wiki': {'carbs': 3.8, 'protein': 2.5, 'fat': 3.2},
+        'Chapati': {'carbs': 46.1, 'protein': 7.9, 'fat': 9.0},
+        'Pilau': {'carbs': 24.8, 'protein': 6.9, 'fat': 9.4},
+        'Nyama Choma': {'carbs': 0.0, 'protein': 28.0, 'fat': 12.0},
+        'Githeri': {'carbs': 19.7, 'protein': 6.7, 'fat': 4.2},
+        'Mukimo': {'carbs': 20.5, 'protein': 5.0, 'fat': 0.7},
+        'Mandazi': {'carbs': 40.0, 'protein': 5.0, 'fat': 15.0},
+
+        // === Newly added foods (per 100g) ===
+        'Bhaji': {
+          'carbs': 6.5,
+          'protein': 3.2,
+          'fat': 7.5,
+        }, // stir-fried leafy greens with oil & spices
+        'Kachumbari': {
+          'carbs': 5.0,
+          'protein': 1.0,
+          'fat': 0.2,
+        }, // tomato-onion salad, minimal oil
+        'Kuku Choma': {
+          'carbs': 0.0,
+          'protein': 28.0,
+          'fat': 10.0,
+        }, // grilled chicken (skin-on, typical)
+        'Masala Chips': {
+          'carbs': 38.0,
+          'protein': 4.5,
+          'fat': 18.0,
+        }, // fried chips tossed in spicy masala & oil
+        'Matoke': {
+          'carbs': 28.0,
+          'protein': 1.5,
+          'fat': 4.5,
+        }, // cooked green bananas/plantains in sauce
+      };
       final macros = macroDb[foodName];
       if (macros != null) {
         return macros.map((k, v) => MapEntry(k, v.round()));
@@ -1992,22 +2048,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
 
     // Static fallback for non-Kenyan foods (will be replaced by API data)
     final fallbackDb = {
-  'Rice': {'carbs': 28, 'protein': 2.7, 'fat': 0.3},
-  'Chicken': {'carbs': 0, 'protein': 31, 'fat': 3.6},
-  'Beef': {'carbs': 0, 'protein': 26, 'fat': 15},
-  'Fish': {'carbs': 0, 'protein': 20, 'fat': 1.5},
-  'Beans': {'carbs': 25, 'protein': 8.7, 'fat': 0.5},
-  'Pizza': {'carbs': 27, 'protein': 10, 'fat': 11.5},
-  'Hamburger': {'carbs': 23, 'protein': 16.5, 'fat': 16.7},
-  'Salad': {'carbs': 4, 'protein': 1, 'fat': 0.2},
-  'Grilled Salmon': {'carbs': 0, 'protein': 25, 'fat': 13},
-  'Chicken Curry': {'carbs': 15, 'protein': 18, 'fat': 9},
-  'Fried Rice': {'carbs': 36, 'protein': 6, 'fat': 5.5},
-  'Miso Soup': {'carbs': 3.6, 'protein': 2, 'fat': 1},
-  'Caesar Salad': {'carbs': 4, 'protein': 3.5, 'fat': 8},
-  'Spaghetti Bolognese': {'carbs': 21, 'protein': 7.5, 'fat': 5.5},
-};
-
+      'Rice': {'carbs': 28, 'protein': 2.7, 'fat': 0.3},
+      'Chicken': {'carbs': 0, 'protein': 31, 'fat': 3.6},
+      'Beef': {'carbs': 0, 'protein': 26, 'fat': 15},
+      'Fish': {'carbs': 0, 'protein': 20, 'fat': 1.5},
+      'Beans': {'carbs': 25, 'protein': 8.7, 'fat': 0.5},
+      'Pizza': {'carbs': 27, 'protein': 10, 'fat': 11.5},
+      'Hamburger': {'carbs': 23, 'protein': 16.5, 'fat': 16.7},
+      'Salad': {'carbs': 4, 'protein': 1, 'fat': 0.2},
+      'Grilled Salmon': {'carbs': 0, 'protein': 25, 'fat': 13},
+      'Chicken Curry': {'carbs': 15, 'protein': 18, 'fat': 9},
+      'Fried Rice': {'carbs': 36, 'protein': 6, 'fat': 5.5},
+      'Miso Soup': {'carbs': 3.6, 'protein': 2, 'fat': 1},
+      'Caesar Salad': {'carbs': 4, 'protein': 3.5, 'fat': 8},
+      'Spaghetti Bolognese': {'carbs': 21, 'protein': 7.5, 'fat': 5.5},
+    };
 
     final macros =
         fallbackDb[foodName] ?? {'carbs': 30, 'protein': 10, 'fat': 5};
@@ -2646,6 +2701,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   Widget _buildResultsState() {
+    final visibleFoods = _mealSummaryDisplayIndices.length;
+    final buttonFoodCount = visibleFoods > 0
+        ? visibleFoods
+        : _segmentedFoods.length;
+
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2691,7 +2751,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                           ),
                           const SizedBox(width: 10),
                           Text(
-                            'Save Meal (${_segmentedFoods.length} item${_segmentedFoods.length > 1 ? "s" : ""})',
+                            'Save Meal ($buttonFoodCount item${buttonFoodCount == 1 ? "" : "s"})',
                             style: const TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.bold,
@@ -2780,6 +2840,9 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   List<Widget> _buildFoodLabels() {
     List<Widget> labels = [];
 
+    final foodsToLabel = _mealSummaryDisplayFoods;
+    if (foodsToLabel.isEmpty) return labels;
+
     // Get actual display dimensions
     final displayHeight = 300.0;
     final displayWidth = MediaQuery.of(context).size.width - 32;
@@ -2842,8 +2905,8 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       return labels;
     }
 
-    for (int i = 0; i < _segmentedFoods.length && i < 5; i++) {
-      final food = _segmentedFoods[i];
+    for (int i = 0; i < foodsToLabel.length && i < 5; i++) {
+      final food = foodsToLabel[i];
       if (food.foodName != null &&
           food.foodName!.isNotEmpty &&
           food.center != null) {
@@ -3254,6 +3317,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   // ============================================================================
 
   Widget _buildModifyFoodSection() {
+    final displayIndices = _mealSummaryDisplayIndices;
+    final displayFoods = displayIndices
+        .map((idx) => _segmentedFoods[idx])
+        .toList();
+
     return Container(
       margin: const EdgeInsets.all(16),
       child: Column(
@@ -3287,7 +3355,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
               // Merge action button
               Row(
                 children: [
-                  if (_segmentedFoods.length >= 2)
+                  if (displayFoods.length >= 2)
                     IconButton(
                       icon: const Icon(Icons.merge_type, color: Colors.blue),
                       tooltip: 'Merge Foods',
@@ -3298,17 +3366,35 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
             ],
           ),
           const SizedBox(height: 16),
+          if (_hiddenFoodCount > 0)
+            if (displayFoods.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'No foods above 55% confidence to display.',
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+              ),
           SizedBox(
             height: 200,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              itemCount: 1 + _segmentedFoods.length, // Add button + foods
+              itemCount: 1 + displayFoods.length, // Add button + foods
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return _buildAddFoodButton();
                 } else {
-                  final foodIndex = index - 1;
-                  return _buildFoodCard(_segmentedFoods[foodIndex], foodIndex);
+                  final displayListIndex = index - 1;
+                  final originalIndex = displayIndices[displayListIndex];
+                  return _buildFoodCard(
+                    _segmentedFoods[originalIndex],
+                    originalIndex,
+                  );
                 }
               },
             ),
@@ -4241,11 +4327,15 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
 
   /// Show merge dialog
   void _showMergeDialog() {
-    if (_segmentedFoods.length < 2) {
+    final displayIndices = _mealSummaryDisplayIndices;
+
+    if (displayIndices.length < 2) {
       if (mounted) {
         try {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('You need at least 2 foods to merge')),
+            const SnackBar(
+              content: Text('Need at least two foods above 55% confidence.'),
+            ),
           );
         } catch (e) {
           print('Error showing snackbar: $e');
@@ -4262,15 +4352,15 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: _segmentedFoods.length,
+            itemCount: displayIndices.length,
             itemBuilder: (context, index) {
-              final food = _segmentedFoods[index];
+              final food = _segmentedFoods[displayIndices[index]];
               return ListTile(
                 title: Text(food.foodName ?? 'Food ${index + 1}'),
                 subtitle: Text('${food.gramsAmount}g'),
                 onTap: () {
                   Navigator.pop(context);
-                  _showMergeSelectionDialog(index);
+                  _showMergeSelectionDialog(displayIndices[index]);
                 },
               );
             },
@@ -4287,6 +4377,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   void _showMergeSelectionDialog(int firstIndex) {
+    final displayIndices = _mealSummaryDisplayIndices;
+    final remainingIndices = displayIndices
+        .where((index) => index != firstIndex)
+        .toList();
     final firstName = _segmentedFoods[firstIndex].foodName ?? 'Food';
 
     showDialog(
@@ -4297,10 +4391,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: _segmentedFoods.length,
+            itemCount: remainingIndices.length,
             itemBuilder: (context, index) {
-              if (index == firstIndex) return const SizedBox.shrink();
-              final food = _segmentedFoods[index];
+              final originalIndex = remainingIndices[index];
+              final food = _segmentedFoods[originalIndex];
               final secondName = food.foodName ?? 'Food ${index + 1}';
 
               // ✅ Show preview of merged name
@@ -4315,7 +4409,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                 subtitle: Text('Will become: $previewName'),
                 onTap: () {
                   Navigator.pop(context);
-                  mergeFoods(firstIndex, index);
+                  mergeFoods(firstIndex, originalIndex);
                 },
               );
             },
