@@ -63,6 +63,30 @@ class FoodItem {
   double getFat() => baseFat * getMultiplier();
 }
 
+enum NutritionBasisKind { per100, perServing, perPackage, unknown }
+
+class NutritionExtractionResult {
+  final double? calories;
+  final double? carbs;
+  final double? protein;
+  final double? fat;
+  final double? baselineQuantity;
+  final String? baselineUnit;
+  final NutritionBasisKind basisKind;
+  final double confidence;
+
+  const NutritionExtractionResult({
+    required this.basisKind,
+    required this.confidence,
+    this.calories,
+    this.carbs,
+    this.protein,
+    this.fat,
+    this.baselineQuantity,
+    this.baselineUnit,
+  });
+}
+
 class MealSummaryPage extends StatefulWidget {
   final String mealType;
   final String? foodName;
@@ -98,8 +122,15 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   final TextEditingController _ocrCarbsController = TextEditingController();
   final TextEditingController _ocrProteinController = TextEditingController();
   final TextEditingController _ocrFatController = TextEditingController();
+  final TextEditingController _ocrServingQuantityController =
+      TextEditingController();
   final TextEditingController _customQuantityController =
       TextEditingController();
+
+  String _ocrUnit = 'g';
+  NutritionBasisKind _reviewBasisKind = NutritionBasisKind.unknown;
+  double _reviewConfidence = 0.0;
+  String _reviewBasisLabel = 'per 100g/ml';
 
   final ImagePicker _imagePicker = ImagePicker();
   final TextRecognizer _textRecognizer = TextRecognizer();
@@ -127,6 +158,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     _ocrCarbsController.dispose();
     _ocrProteinController.dispose();
     _ocrFatController.dispose();
+    _ocrServingQuantityController.dispose();
     _customQuantityController.dispose();
     _textRecognizer.close();
     super.dispose();
@@ -158,8 +190,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           food.baseCarbs = (data?['carbs'] ?? 0).toDouble();
           food.baseProtein = (data?['protein'] ?? 0).toDouble();
           food.baseFat = (data?['fat'] ?? 0).toDouble();
-          food.servingUnit = 'g';
-          food.baselineQuantity = 100.0;
+          food.servingUnit = (data?['unit'] ?? 'g').toString();
+          final baselineRaw = data?['baselineQuantity'];
+          food.baselineQuantity = baselineRaw is num
+              ? baselineRaw.toDouble()
+              : double.tryParse(baselineRaw?.toString() ?? '') ?? 100.0;
           food.foodName = data?['foodName'];
           food.hasNutritionData = true;
           _isLoading = false;
@@ -178,8 +213,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           food.baseCarbs = (data?['carbs'] ?? 0).toDouble();
           food.baseProtein = (data?['protein'] ?? 0).toDouble();
           food.baseFat = (data?['fat'] ?? 0).toDouble();
-          food.servingUnit = 'g';
-          food.baselineQuantity = 100.0;
+          food.servingUnit = (data?['unit'] ?? 'g').toString();
+          final baselineRaw = data?['baselineQuantity'];
+          food.baselineQuantity = baselineRaw is num
+              ? baselineRaw.toDouble()
+              : double.tryParse(baselineRaw?.toString() ?? '') ?? 100.0;
           food.foodName = data?['foodName'];
           food.hasNutritionData = true;
           _isLoading = false;
@@ -328,8 +366,8 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         return;
       }
 
-      // Lookup product name
-      String productName = await _enhancedBarcodeLookup(barcode);
+      // Lookup product name (may be null if unrecognized)
+      final String? productName = await _enhancedBarcodeLookup(barcode);
 
       // Add new food item
       final newFood = FoodItem(barcode: barcode, foodName: productName);
@@ -348,7 +386,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     }
   }
 
-  Future<String> _enhancedBarcodeLookup(String barcode) async {
+  Future<String?> _enhancedBarcodeLookup(String barcode) async {
     try {
       final url = Uri.parse(
         'https://world.openfoodfacts.org/api/v0/product/$barcode.json',
@@ -364,7 +402,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               product['product_name_en'] ??
               product['generic_name'];
 
-          if (productName != null && productName.toString().trim().isNotEmpty) {
+          if (productName != null &&
+              productName.toString().trim().isNotEmpty &&
+              productName.toString().trim().toLowerCase() != 'unknown product') {
             return productName.toString();
           }
         }
@@ -372,7 +412,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     } catch (e) {
       // Continue to fallback
     }
-    return 'Unknown Product (Barcode: $barcode)';
+    return null;
   }
 
   Future<void> _captureNutritionalInfo() async {
@@ -391,87 +431,494 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         inputImage,
       );
 
-      final extractedData = _extractNutritionalData(recognizedText.text);
+      final parsed = _parseNutritionFromOcrText(recognizedText.text);
 
-      if (extractedData['calories'] != null ||
-          extractedData['carbs'] != null ||
-          extractedData['protein'] != null ||
-          extractedData['fat'] != null) {
+      final bool missingAnyMacro = parsed.calories == null ||
+          parsed.carbs == null ||
+          parsed.protein == null ||
+          parsed.fat == null;
+      final bool productNeedsName = _currentFood.foodName == null ||
+          _currentFood.foodName!.trim().isEmpty ||
+          _currentFood.foodName!.toLowerCase().contains('unknown product');
+
+      final bool missingBasis = (parsed.basisKind == NutritionBasisKind.perServing ||
+              parsed.basisKind == NutritionBasisKind.perPackage) &&
+          (parsed.baselineQuantity == null ||
+              parsed.baselineUnit == null ||
+              parsed.baselineQuantity! <= 0);
+
+      final bool needsReview =
+          missingAnyMacro || parsed.confidence < 0.65 || productNeedsName || missingBasis;
+
+      if (!needsReview) {
+        final resolvedName = _currentFood.foodName?.trim() ?? '';
+        if (resolvedName.trim().isEmpty) {
+          // Still require a name if we can't confidently resolve one.
+          setState(() => _isProcessingOcr = false);
+          _openManualNutritionReview();
+          return;
+        }
+
         setState(() {
-          _tempCalories = extractedData['calories'] ?? 0;
-          _tempCarbs = extractedData['carbs'] ?? 0;
-          _tempProtein = extractedData['protein'] ?? 0;
-          _tempFat = extractedData['fat'] ?? 0;
-
-          _ocrCaloriesController.text = _tempCalories.toStringAsFixed(1);
-          _ocrCarbsController.text = _tempCarbs.toStringAsFixed(1);
-          _ocrProteinController.text = _tempProtein.toStringAsFixed(1);
-          _ocrFatController.text = _tempFat.toStringAsFixed(1);
-
-          _isProcessingOcr = false;
-          _showOcrReview = true;
+          _currentFood
+            ..foodName = resolvedName.trim()
+            ..baseCalories = parsed.calories ?? 0
+            ..baseCarbs = parsed.carbs ?? 0
+            ..baseProtein = parsed.protein ?? 0
+            ..baseFat = parsed.fat ?? 0
+            ..baselineQuantity = parsed.baselineQuantity ?? 100.0
+            ..servingUnit = parsed.baselineUnit ?? 'g'
+            ..hasNutritionData = true
+            ..isOcrMode = true;
         });
-      } else {
+
+        await _firestore.collection('barcodes').doc(_currentFood.barcode).set({
+          'calories': _currentFood.baseCalories,
+          'carbs': _currentFood.baseCarbs,
+          'protein': _currentFood.baseProtein,
+          'fat': _currentFood.baseFat,
+          'foodName': _currentFood.foodName,
+          'unit': _currentFood.servingUnit,
+          'baselineQuantity': _currentFood.baselineQuantity,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
         setState(() => _isProcessingOcr = false);
-        _showErrorDialog(
-          'Could not extract nutritional information from the image. Please try again or enter values manually.',
-        );
+        _showOcrReview = false;
+        return;
       }
+
+      // Review/edit screen (prefilled with OCR)
+      setState(() {
+        _reviewBasisKind = parsed.basisKind;
+        _reviewConfidence = parsed.confidence;
+        _ocrUnit = parsed.baselineUnit ?? _currentFood.servingUnit;
+
+        _foodNameController.clear();
+        _ocrCaloriesController.text =
+            parsed.calories?.toStringAsFixed(1) ?? '';
+        _ocrCarbsController.text = parsed.carbs?.toStringAsFixed(1) ?? '';
+        _ocrProteinController.text =
+            parsed.protein?.toStringAsFixed(1) ?? '';
+        _ocrFatController.text = parsed.fat?.toStringAsFixed(1) ?? '';
+
+        _ocrServingQuantityController.text =
+            parsed.baselineQuantity?.toStringAsFixed(1) ?? '100';
+        _reviewBasisLabel = _buildReviewBasisLabel();
+
+        _isProcessingOcr = false;
+        _showOcrReview = true;
+      });
     } catch (e) {
       setState(() => _isProcessingOcr = false);
       _showErrorDialog('Error processing image: ${e.toString()}');
     }
   }
 
-  Map<String, double?> _extractNutritionalData(String text) {
-    final lines = text.split('\n').map((l) => l.trim()).toList();
+  NutritionExtractionResult _parseNutritionFromOcrText(String rawText) {
+    final normalizedText = _normalizeOcrTextForParsing(rawText);
+    final lines = normalizedText
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
 
-    double? calories;
-    double? protein;
-    double? carbs;
-    double? fat;
+    // Basis indicators
+    final per100Regex = RegExp(r'(?:(?:per\s*)?100)\s*(g|ml)\b',
+        caseSensitive: false);
+    final perServingRegex = RegExp(
+      r'(per\s*(?:\d+[\dOo\., ]*)?\s*(serving|portion|serve)\b|serving\s*size\b|portion\s*size\b)',
+      caseSensitive: false,
+    );
+    final perPackageRegex = RegExp(
+      r'per\s*(?:\d+[\dOo\., ]*)?\s*(pack|package|container|bottle|can)\b|net\s*(weight|content)\b|contents\b',
+      caseSensitive: false,
+    );
 
-    for (int i = 0; i < lines.length; i++) {
-      final l = lines[i].toLowerCase();
-      final match = RegExp(r'(\d+\.?\d*)\s*kcal').firstMatch(l);
-      if (match != null) {
-        calories = double.tryParse(match.group(1)!);
-        int macroIdx = i + 1;
-        int found = 0;
-        while (macroIdx < lines.length && found < 3) {
-          final macroLine = lines[macroIdx].toLowerCase();
-          if (macroLine.contains('of which')) {
-            macroIdx++;
-            continue;
-          }
-          final macroMatch = RegExp(r'(\d+\.?\d*)\s*g').firstMatch(macroLine);
-          if (macroMatch != null) {
-            final val = double.tryParse(macroMatch.group(1)!);
-            if (val != null) {
-              if (found == 0)
-                protein = val;
-              else if (found == 1)
-                carbs = val;
-              else if (found == 2)
-                fat = val;
-              found++;
-            }
-          }
-          macroIdx++;
-        }
-        break;
+    final per100Indices = _findLineIndices(lines, per100Regex);
+    final perServingIndices = _findLineIndices(lines, perServingRegex);
+    final perPackageIndices = _findLineIndices(lines, perPackageRegex);
+
+    NutritionExtractionResult? bestPer100;
+    for (final idx in per100Indices) {
+      final candidate = _extractBasisNutrition(
+        lines: lines,
+        basisKind: NutritionBasisKind.per100,
+        basisIndex: idx,
+      );
+      if (bestPer100 == null || candidate.confidence > bestPer100.confidence) {
+        bestPer100 = candidate;
       }
     }
 
-    return {
-      'calories': calories,
-      'carbs': carbs,
-      'protein': protein,
-      'fat': fat,
-    };
+    NutritionExtractionResult? bestPerServing;
+    for (final idx in perServingIndices) {
+      final candidate = _extractBasisNutrition(
+        lines: lines,
+        basisKind: NutritionBasisKind.perServing,
+        basisIndex: idx,
+      );
+      if (bestPerServing == null ||
+          candidate.confidence > bestPerServing.confidence) {
+        bestPerServing = candidate;
+      }
+    }
+
+    NutritionExtractionResult? bestPerPackage;
+    for (final idx in perPackageIndices) {
+      final candidate = _extractBasisNutrition(
+        lines: lines,
+        basisKind: NutritionBasisKind.perPackage,
+        basisIndex: idx,
+      );
+      if (bestPerPackage == null ||
+          candidate.confidence > bestPerPackage.confidence) {
+        bestPerPackage = candidate;
+      }
+    }
+
+    // Prefer per-serving only when serving size is clearly detected.
+    final bool perServingHasBasis =
+        bestPerServing != null &&
+            bestPerServing.baselineQuantity != null &&
+            bestPerServing.baselineQuantity! > 0.0;
+
+    final bool per100HasBasis =
+        bestPer100 != null && bestPer100.baselineQuantity != null;
+
+    if (perServingHasBasis) {
+      return bestPerServing!;
+    }
+
+    if (per100HasBasis) {
+      return bestPer100!;
+    }
+
+    if (bestPerPackage != null) {
+      return bestPerPackage!;
+    }
+
+    // Last resort: try to extract macros without strict basis assumptions.
+    final macros = _extractMacrosFromLines(lines);
+    final anyMacroFound = macros.calories != null ||
+        macros.carbs != null ||
+        macros.protein != null ||
+        macros.fat != null;
+    return NutritionExtractionResult(
+      basisKind: NutritionBasisKind.unknown,
+      confidence: anyMacroFound ? 0.3 : 0.0,
+      calories: macros.calories,
+      carbs: macros.carbs,
+      protein: macros.protein,
+      fat: macros.fat,
+      baselineQuantity: 100.0,
+      baselineUnit: 'g',
+    );
   }
 
-  void _confirmOcrValues() {
+  List<int> _findLineIndices(List<String> lines, RegExp regex) {
+    final indices = <int>[];
+    for (int i = 0; i < lines.length; i++) {
+      if (regex.hasMatch(lines[i])) indices.add(i);
+    }
+    return indices;
+  }
+
+  NutritionExtractionResult _extractBasisNutrition({
+    required List<String> lines,
+    required NutritionBasisKind basisKind,
+    required int basisIndex,
+  }) {
+    final start = (basisIndex - 2).clamp(0, lines.length);
+    final end = (basisIndex + 14).clamp(0, lines.length);
+    final window = lines.sublist(start, end);
+
+    double? baselineQuantity;
+    String? baselineUnit;
+
+    if (basisKind == NutritionBasisKind.per100) {
+      final line = lines[basisIndex];
+      final m = RegExp(r'100\s*(g|ml)\b', caseSensitive: false).firstMatch(line);
+      baselineUnit = m?.group(1) ?? 'g';
+      baselineQuantity = 100.0;
+    } else if (basisKind == NutritionBasisKind.perServing) {
+      final qty = _extractServingQuantityFromWindow(lines: window);
+      baselineQuantity = qty?.quantity;
+      baselineUnit = qty?.unit;
+    } else if (basisKind == NutritionBasisKind.perPackage) {
+      final qty = _extractPackageQuantityFromWindow(lines: window);
+      baselineQuantity = qty?.quantity;
+      baselineUnit = qty?.unit;
+    }
+
+    final macros = _extractMacrosFromLines(window);
+
+    final macroFoundCount = [
+      macros.calories != null,
+      macros.carbs != null,
+      macros.protein != null,
+      macros.fat != null,
+    ].where((x) => x).length;
+
+    final hasAnyMacro = macroFoundCount > 0;
+    final hasBasis = baselineQuantity != null && baselineQuantity! > 0.0 && baselineUnit != null;
+
+    double confidence =
+        (macroFoundCount / 4.0) * 0.7 + (hasBasis ? 0.3 : 0.0);
+    if (!hasAnyMacro) confidence = 0.0;
+
+    return NutritionExtractionResult(
+      basisKind: basisKind,
+      confidence: confidence,
+      calories: macros.calories,
+      carbs: macros.carbs,
+      protein: macros.protein,
+      fat: macros.fat,
+      baselineQuantity: baselineQuantity,
+      baselineUnit: baselineUnit,
+    );
+  }
+
+  ({double? calories, double? carbs, double? protein, double? fat})
+      _extractMacrosFromLines(List<String> lines) {
+    double? calories;
+    double? carbs;
+    double? protein;
+    double? fat;
+
+    final normalizedLines =
+        lines.map(_normalizeNutritionLineForMatching).toList(growable: false);
+
+    for (int i = 0; i < normalizedLines.length; i++) {
+      final line = normalizedLines[i];
+      final nextLine =
+          i + 1 < normalizedLines.length ? normalizedLines[i + 1] : null;
+      final combinedLine = nextLine == null ? line : '$line $nextLine';
+
+      calories ??= _extractMacroValueForLabel(
+        line: line,
+        combinedLine: combinedLine,
+        labelPattern: r'(energy|calories|kcal|kilocalories)',
+        unitPattern: r'(?:kcal|cal)',
+      );
+
+      carbs ??= _extractMacroValueForLabel(
+        line: line,
+        combinedLine: combinedLine,
+        labelPattern: r'(carbohydrates|carbohydrate|carbs?)',
+        unitPattern: r'g',
+      );
+
+      protein ??= _extractMacroValueForLabel(
+        line: line,
+        combinedLine: combinedLine,
+        labelPattern: r'proteins?',
+        unitPattern: r'g',
+      );
+
+      fat ??= _extractMacroValueForLabel(
+        line: line,
+        combinedLine: combinedLine,
+        labelPattern: r'(?:total\s+fat|fat\b)',
+        unitPattern: r'g',
+        invalidContextPattern: RegExp(r'saturated|trans', caseSensitive: false),
+      );
+    }
+
+    return (calories: calories, carbs: carbs, protein: protein, fat: fat);
+  }
+
+  String _normalizeOcrTextForParsing(String input) {
+    var text = input.toLowerCase();
+
+    // Common label OCR mistakes.
+    text = text.replaceAll(RegExp(r'kca\s*i'), 'kcal');
+    text = text.replaceAll(RegExp(r'kca[i1l]', caseSensitive: false), 'kcal');
+    text = text.replaceAll(
+      RegExp(r'carbohydrat[e3]s?', caseSensitive: false),
+      'carbohydrates',
+    );
+    text = text.replaceAll(
+      RegExp(r'prot[e3][i1l]n', caseSensitive: false),
+      'protein',
+    );
+    text = text.replaceAll(
+      RegExp(r'tota[1l]\s*fat', caseSensitive: false),
+      'total fat',
+    );
+    text = text.replaceAll(RegExp(r'ener9y', caseSensitive: false), 'energy');
+
+    return text;
+  }
+
+  String _normalizeNutritionLineForMatching(String input) {
+    return input
+        .replaceAll('|', ' ')
+        .replaceAll(':', ' ')
+        .replaceAll(';', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  double? _parseOcrNumber(String raw) {
+    var token = raw.trim().toLowerCase();
+
+    // Heuristic fixes for numeric OCR noise.
+    token = token
+        .replaceAll('o', '0')
+        .replaceAll('O', '0')
+        .replaceAll('l', '1')
+        .replaceAll('i', '1');
+
+    // Fix common broken decimals like "12 3" => "12.3"
+    final brokenDecimal = RegExp(r'^(\d+)\s+(\d{1,2})$').firstMatch(token);
+    if (brokenDecimal != null) {
+      final composed = '${brokenDecimal.group(1)}.${brokenDecimal.group(2)}';
+      return double.tryParse(composed);
+    }
+
+    token = token.replaceAll(',', '.');
+    token = token.replaceAll(RegExp(r'\s+'), '');
+
+    // Keep only the first decimal point if OCR produced multiple.
+    final firstDot = token.indexOf('.');
+    if (firstDot != -1) {
+      final before = token.substring(0, firstDot);
+      final after = token.substring(firstDot + 1).replaceAll('.', '');
+      token = '$before.$after';
+    }
+
+    final cleaned = token.replaceAll(RegExp(r'[^0-9\.\-]'), '');
+    if (cleaned.isEmpty) return null;
+    return double.tryParse(cleaned);
+  }
+
+  double? _extractMacroValueForLabel({
+    required String line,
+    required String combinedLine,
+    required String labelPattern,
+    required String unitPattern,
+    RegExp? invalidContextPattern,
+  }) {
+    if (invalidContextPattern != null &&
+        invalidContextPattern.hasMatch(line) &&
+        !RegExp(labelPattern, caseSensitive: false).hasMatch(line)) {
+      return null;
+    }
+
+    final directPatterns = <RegExp>[
+      RegExp(
+        '$labelPattern[^0-9]{0,14}([0-9OoIl\\., ]+)(?:\\s*$unitPattern\\b)?',
+        caseSensitive: false,
+      ),
+      RegExp(
+        '([0-9OoIl\\., ]+)(?:\\s*$unitPattern\\b)?[^a-z]{0,8}$labelPattern',
+        caseSensitive: false,
+      ),
+    ];
+
+    for (final pattern in directPatterns) {
+      final match = pattern.firstMatch(line);
+      if (match != null) {
+        final parsed = _parseOcrNumber(match.group(1) ?? '');
+        if (parsed != null) return parsed;
+      }
+    }
+
+    final crossLineMatch = RegExp(
+      '$labelPattern[^0-9]{0,18}([0-9OoIl\\., ]+)(?:\\s*$unitPattern\\b)?',
+      caseSensitive: false,
+    ).firstMatch(combinedLine);
+    if (crossLineMatch != null) {
+      final parsed = _parseOcrNumber(crossLineMatch.group(1) ?? '');
+      if (parsed != null) return parsed;
+    }
+
+    return null;
+  }
+
+  // Temporary struct-like record for serving/package quantity.
+  ({double? quantity, String? unit})? _extractServingQuantityFromWindow({
+    required List<String> lines,
+  }) {
+    final keywordRegex = RegExp(
+      r'(serving|portion|serve|servings?\s+per\s+container)',
+      caseSensitive: false,
+    );
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = _normalizeNutritionLineForMatching(lines[i]);
+      if (!keywordRegex.hasMatch(line)) continue;
+
+      final sameLine = _extractQuantityWithUnit(line);
+      if (sameLine != null) return sameLine;
+
+      if (i + 1 < lines.length) {
+        final nextLine = _normalizeNutritionLineForMatching(lines[i + 1]);
+        final nextLineQty = _extractQuantityWithUnit(nextLine);
+        if (nextLineQty != null) return nextLineQty;
+      }
+
+      final parenthetical = RegExp(
+        r'\(([0-9OoIl\., ]+)\s*(g|ml|oz)\b\)',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (parenthetical != null) {
+        final q = _parseOcrNumber(parenthetical.group(1) ?? '');
+        final unit = parenthetical.group(2);
+        if (q != null && q > 0 && unit != null) {
+          return (quantity: q, unit: unit);
+        }
+      }
+    }
+    return null;
+  }
+
+  ({double? quantity, String? unit})? _extractPackageQuantityFromWindow({
+    required List<String> lines,
+  }) {
+    final keywordRegex = RegExp(
+      r'(per\s*(pack|package|container|bottle|can)|net\s*(weight|content)|contents)',
+      caseSensitive: false,
+    );
+
+    for (int i = 0; i < lines.length; i++) {
+      final line = _normalizeNutritionLineForMatching(lines[i]);
+      if (!keywordRegex.hasMatch(line)) continue;
+
+      final sameLine = _extractQuantityWithUnit(line);
+      if (sameLine != null) return sameLine;
+
+      if (i + 1 < lines.length) {
+        final nextLine = _normalizeNutritionLineForMatching(lines[i + 1]);
+        final nextLineQty = _extractQuantityWithUnit(nextLine);
+        if (nextLineQty != null) return nextLineQty;
+      }
+    }
+    return null;
+  }
+
+  ({double? quantity, String? unit})? _extractQuantityWithUnit(String line) {
+    final match = RegExp(
+      r'([0-9OoIl\., ]+)\s*(g|ml|oz)\b',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (match == null) return null;
+
+    final quantity = _parseOcrNumber(match.group(1) ?? '');
+    final unit = match.group(2);
+    if (quantity == null || quantity <= 0 || unit == null) return null;
+
+    return (quantity: quantity, unit: unit);
+  }
+
+  Future<void> _confirmOcrValues() async {
+    final foodName = _foodNameController.text.trim();
+    if (foodName.isEmpty) {
+      _showErrorDialog('Please enter a food name.');
+      return;
+    }
+
     final calories = double.tryParse(_ocrCaloriesController.text) ?? 0;
     final carbs = double.tryParse(_ocrCarbsController.text) ?? 0;
     final protein = double.tryParse(_ocrProteinController.text) ?? 0;
@@ -482,14 +929,39 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
       return;
     }
 
+    final servingQty = double.tryParse(_ocrServingQuantityController.text);
+    if (servingQty == null || servingQty <= 0) {
+      _showErrorDialog('Please enter a valid serving quantity.');
+      return;
+    }
+
     setState(() {
-      _currentFood.baseCalories = calories;
-      _currentFood.baseCarbs = carbs;
-      _currentFood.baseProtein = protein;
-      _currentFood.baseFat = fat;
+      _currentFood
+        ..foodName = foodName
+        ..baseCalories = calories
+        ..baseCarbs = carbs
+        ..baseProtein = protein
+        ..baseFat = fat
+        ..baselineQuantity = servingQty
+        ..servingUnit = _ocrUnit
+        ..hasNutritionData = true
+        ..isOcrMode = true;
     });
 
-    _showFoodNameDialogAndSave();
+    await _firestore.collection('barcodes').doc(_currentFood.barcode).set({
+      'calories': _currentFood.baseCalories,
+      'carbs': _currentFood.baseCarbs,
+      'protein': _currentFood.baseProtein,
+      'fat': _currentFood.baseFat,
+      'foodName': _currentFood.foodName,
+      'unit': _currentFood.servingUnit,
+      'baselineQuantity': _currentFood.baselineQuantity,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    setState(() {
+      _showOcrReview = false;
+    });
   }
 
   Future<void> _showFoodNameDialogAndSave() async {
@@ -569,6 +1041,174 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     );
   }
 
+  Widget _buildProductNotIdentifiedFallbackCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.orange[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orange[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.orange[700]),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Product not identified',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Add image to show what to scan
+          Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                height: 160,
+                width: 220,
+                child: Image.asset(
+                  'assets/nutritional_info.png',
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Center(
+            child: Text(
+              'Example of a nutritional label to scan',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[800],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton.icon(
+              onPressed: _captureNutritionalInfo,
+              icon: const Icon(Icons.camera_alt, color: Colors.white),
+              label: const Text(
+                'Scan Nutritional Facts',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(28),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: OutlinedButton.icon(
+              onPressed: _openManualNutritionReview,
+              icon: const Icon(Icons.edit, color: Colors.green),
+              label: const Text(
+                'Enter Manually',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.green,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.green, width: 2),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(28),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openManualNutritionReview() {
+    final bool hasExisting = _currentFood.hasNutritionData;
+
+    setState(() {
+      _foodNameController.clear();
+
+      _ocrCaloriesController.text = hasExisting
+          ? _currentFood.baseCalories.toStringAsFixed(1)
+          : '';
+      _ocrCarbsController.text =
+          hasExisting ? _currentFood.baseCarbs.toStringAsFixed(1) : '';
+      _ocrProteinController.text =
+          hasExisting ? _currentFood.baseProtein.toStringAsFixed(1) : '';
+      _ocrFatController.text =
+          hasExisting ? _currentFood.baseFat.toStringAsFixed(1) : '';
+
+      _ocrUnit = hasExisting ? _currentFood.servingUnit : 'g';
+      _ocrServingQuantityController.text =
+          hasExisting ? _currentFood.baselineQuantity.toStringAsFixed(1) : '100';
+
+      _reviewConfidence = hasExisting ? 0.9 : 0.0;
+      _reviewBasisKind = NutritionBasisKind.unknown;
+      if (hasExisting) {
+        if (_currentFood.baselineQuantity == 100.0) {
+          _reviewBasisKind = NutritionBasisKind.per100;
+        } else {
+          _reviewBasisKind = NutritionBasisKind.perServing;
+        }
+      }
+      _reviewBasisLabel = _buildReviewBasisLabel();
+
+      _showOcrReview = true;
+    });
+  }
+
+  String _buildReviewBasisLabel() {
+    final qty = double.tryParse(_ocrServingQuantityController.text);
+    final unit = _ocrUnit;
+
+    String? qtyStr;
+    if (qty != null && qty > 0) {
+      qtyStr = qty.toStringAsFixed(1);
+      qtyStr = qtyStr!.replaceAll(RegExp(r'\.0$'), '');
+    }
+
+    switch (_reviewBasisKind) {
+      case NutritionBasisKind.per100:
+        return 'per 100$unit';
+      case NutritionBasisKind.perServing:
+        return (qtyStr != null && qtyStr.isNotEmpty)
+            ? 'per serving ($qtyStr$unit)'
+            : 'per serving';
+      case NutritionBasisKind.perPackage:
+        return (qtyStr != null && qtyStr.isNotEmpty)
+            ? 'per package ($qtyStr$unit)'
+            : 'per package';
+      case NutritionBasisKind.unknown:
+      default:
+        return (qtyStr != null && qtyStr.isNotEmpty)
+            ? 'per $qtyStr$unit'
+            : 'per 100$unit';
+    }
+  }
+
   void _saveAllFoodDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -576,6 +1216,19 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         context,
       ).showSnackBar(const SnackBar(content: Text('User not logged in!')));
       return;
+    }
+
+    // Prevent saving items that are still using a placeholder name.
+    for (final food in _foodItems) {
+      final name = food.foodName?.trim();
+      if (name == null ||
+          name.isEmpty ||
+          name.toLowerCase().contains('unknown product')) {
+        _showErrorDialog(
+          'Product not identified yet. Please use "Enter Manually" or "Scan Nutritional Facts" before saving.',
+        );
+        return;
+      }
     }
 
     final now = DateTime.now();
@@ -600,7 +1253,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           .doc(user.uid)
           .collection('barcodes')
           .add({
-            'foodName': food.foodName ?? 'Unknown Product (${food.barcode})',
+            'foodName': food.foodName!,
             'calories': food.getCalories(),
             'carbs': food.getCarbs(),
             'protein': food.getProtein(),
@@ -873,189 +1526,289 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green[300]!),
-                    ),
-                    child: Text(
-                      _currentFood.foodName ??
-                          'Unknown Product (${_currentFood.barcode})',
-                      style: const TextStyle(fontSize: 18, color: Colors.black),
-                    ),
-                  ),
-
-                  if (_currentFood.hasNutritionData) ...[
-                    const SizedBox(height: 24),
-                    _buildQuantityControl(),
-                    const SizedBox(height: 24),
-                    _buildNutritionInfo(),
-                    const SizedBox(height: 24),
-
-                    // Scan Another Food Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: OutlinedButton.icon(
-                        onPressed: _scanAnotherFood,
-                        icon: const Icon(Icons.qr_code_scanner),
-                        label: const Text(
-                          'Scan Another Food',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.green,
-                          side: const BorderSide(color: Colors.green, width: 2),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(28),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Save All Foods Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: _saveAllFoodDetails,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(28),
-                          ),
+                  Builder(
+                    builder: (context) {
+                      final productNotIdentified = _currentFood.foodName == null ||
+                          _currentFood.foodName!.trim().isEmpty ||
+                          _currentFood.foodName!
+                              .toLowerCase()
+                              .contains('unknown product');
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green[300]!),
                         ),
                         child: Text(
-                          _foodItems.length > 1
-                              ? 'Save All ${_foodItems.length} Items'
-                              : 'Save & Continue',
+                          productNotIdentified
+                              ? 'Product not identified'
+                              : (_currentFood.foodName ?? 'Product not identified'),
                           style: const TextStyle(
                             fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
+                            color: Colors.black,
                           ),
                         ),
-                      ),
-                    ),
-                  ] else ...[
-                    const SizedBox(height: 24),
+                      );
+                    },
+                  ),
+                  Builder(
+                    builder: (context) {
+                      final productNotIdentified = _currentFood.foodName == null ||
+                          _currentFood.foodName!.trim().isEmpty ||
+                          _currentFood.foodName!
+                              .toLowerCase()
+                              .contains('unknown product');
 
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.orange[50],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.orange[300]!),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.info_outline,
-                                color: Colors.orange[700],
+                      if (productNotIdentified) {
+                        return Column(
+                          children: [
+                            const SizedBox(height: 24),
+                            _buildProductNotIdentifiedFallbackCard(),
+                            if (_currentFood.hasNutritionData) ...[
+                              const SizedBox(height: 24),
+                              _buildQuantityControl(),
+                              const SizedBox(height: 24),
+                              _buildNutritionInfo(),
+                              const SizedBox(height: 24),
+                            ],
+                            if (_currentFood.hasNutritionData) ...[
+                              // Scan Another Food Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: OutlinedButton.icon(
+                                  onPressed: _scanAnotherFood,
+                                  icon: const Icon(Icons.qr_code_scanner),
+                                  label: const Text(
+                                    'Scan Another Food',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.green,
+                                    side: const BorderSide(
+                                      color: Colors.green,
+                                      width: 2,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                  ),
+                                ),
                               ),
-                              const SizedBox(width: 12),
-                              const Expanded(
-                                child: Text(
-                                  'Nutritional information not available for this product.',
-                                  style: TextStyle(color: Colors.black87),
+                              const SizedBox(height: 16),
+
+                              // Save All Foods Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: ElevatedButton(
+                                  onPressed: _saveAllFoodDetails,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(28),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _foodItems.length > 1
+                                        ? 'Save All ${_foodItems.length} Items'
+                                        : 'Save & Continue',
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Take a photo of the nutritional information on the package to extract the details.',
-                            style: TextStyle(
-                              color: Colors.black87,
-                              fontSize: 14,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
+                          ],
+                        );
+                      }
 
-                    const SizedBox(height: 24),
-
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      color: Colors.white,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
+                      if (_currentFood.hasNutritionData) {
+                        return Column(
                           children: [
-                            Text(
-                              'How to scan nutritional information',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green[800],
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 12),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: SizedBox(
-                                height: 200,
-                                width: 280,
-                                child: Image.asset(
-                                  'assets/nutritional_info.png',
-                                  fit: BoxFit.contain,
+                            const SizedBox(height: 24),
+                            _buildQuantityControl(),
+                            const SizedBox(height: 24),
+                            _buildNutritionInfo(),
+                            const SizedBox(height: 24),
+
+                            // Scan Another Food Button
+                            SizedBox(
+                              width: double.infinity,
+                              height: 56,
+                              child: OutlinedButton.icon(
+                                onPressed: _scanAnotherFood,
+                                icon: const Icon(Icons.qr_code_scanner),
+                                label: const Text(
+                                  'Scan Another Food',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.green,
+                                  side: const BorderSide(
+                                    color: Colors.green,
+                                    width: 2,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(28),
+                                  ),
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 12),
-                            Text(
-                              'Make sure to capture the full nutritional label, similar to the example above. The clearer the image, the better the results!',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[800],
+                            const SizedBox(height: 16),
+
+                            // Save All Foods Button
+                            SizedBox(
+                              width: double.infinity,
+                              height: 56,
+                              child: ElevatedButton(
+                                onPressed: _saveAllFoodDetails,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(28),
+                                  ),
+                                ),
+                                child: Text(
+                                  _foodItems.length > 1
+                                      ? 'Save All ${_foodItems.length} Items'
+                                      : 'Save & Continue',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
+                        );
+                      }
 
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton.icon(
-                        onPressed: _captureNutritionalInfo,
-                        icon: const Icon(Icons.camera_alt, color: Colors.white),
-                        label: const Text(
-                          'Scan Nutrition Label',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
+                      return Column(
+                        children: [
+                          const SizedBox(height: 24),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.orange[50],
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.orange[300]!),
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      color: Colors.orange[700],
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Text(
+                                        'Nutritional information not available for this product.',
+                                        style: TextStyle(color: Colors.black87),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'Take a photo of the nutritional information on the package to extract the details.',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontSize: 14,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Card(
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
                             color: Colors.white,
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                children: [
+                                  Text(
+                                    'How to scan nutritional information',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green[800],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: SizedBox(
+                                      height: 200,
+                                      width: 280,
+                                      child: Image.asset(
+                                        'assets/nutritional_info.png',
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    'Make sure to capture the full nutritional label, similar to the example above. The clearer the image, the better the results!',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[800],
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(28),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              onPressed: _captureNutritionalInfo,
+                              icon:
+                                  const Icon(Icons.camera_alt, color: Colors.white),
+                              label: const Text(
+                                'Scan Nutritional Facts',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
-                  ],
+                        ],
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -1187,7 +1940,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
         itemBuilder: (context, index) {
           final isSelected = index == _currentFoodIndex;
           final food = _foodItems[index];
-          final foodName = food.foodName ?? 'Unknown Product (${food.barcode})';
+          final foodName = food.foodName ?? 'Product not identified';
           final displayName = foodName.length > 20
               ? '${foodName.substring(0, 20)}...'
               : foodName;
@@ -1543,7 +2296,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Review Extracted Values'),
+        title: const Text('Review Nutritional Facts'),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
         leading: IconButton(
@@ -1574,10 +2327,10 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                 children: [
                   Icon(Icons.info_outline, color: Colors.blue[700]),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Review and edit the extracted nutritional values per 100g/ml',
-                      style: TextStyle(
+                      'Review and edit the extracted nutritional values (${_reviewBasisLabel})',
+                      style: const TextStyle(
                         color: Colors.black87,
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
@@ -1588,10 +2341,124 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               ),
             ),
 
+            if (_reviewConfidence < 0.65)
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 0),
+                child: Text(
+                  'Tip: Please verify the values below (OCR confidence is low).',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[700],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+
             const SizedBox(height: 24),
 
             const Text(
-              'Nutritional Information (per 100g/ml)',
+              'Food Details',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.black,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Food name (required for saving)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: TextField(
+                controller: _foodNameController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Food name',
+                  hintText: 'e.g., Oat Milk',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Quantity basis: baseline quantity + unit for scaling
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Quantity basis',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _ocrServingQuantityController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'^\d*\.?\d*'),
+                            ),
+                          ],
+                          decoration: InputDecoration(
+                            isDense: true,
+                            hintText: '100',
+                            suffixText: _ocrUnit,
+                            suffixStyle: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[600],
+                            ),
+                            border: const OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      DropdownButton<String>(
+                        value: _ocrUnit,
+                        items: const [
+                          DropdownMenuItem(value: 'g', child: Text('g')),
+                          DropdownMenuItem(value: 'ml', child: Text('ml')),
+                          DropdownMenuItem(value: 'oz', child: Text('oz')),
+                        ],
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _ocrUnit = v;
+                            _reviewBasisLabel = _buildReviewBasisLabel();
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            const Text(
+              'Nutritional Information',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
@@ -1645,7 +2512,9 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed: _confirmOcrValues,
+                onPressed: () async {
+                  await _confirmOcrValues();
+                },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   shape: RoundedRectangleBorder(

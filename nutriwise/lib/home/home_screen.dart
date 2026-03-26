@@ -527,7 +527,11 @@ class _HomeScreenState extends State<HomeScreen> {
       int totalCarbs = 0;
       int totalProtein = 0;
       int totalFat = 0;
-      int totalGrams = 0;
+      double totalQuantity = 0;
+      String quantityUnit = 'g';
+      bool hasQuantity = false;
+      bool mixedUnits = false;
+      bool hasQuantityUnit = false;
 
       for (var foodItem in foodItems) {
         final foodData = foodItem as Map<String, dynamic>;
@@ -536,7 +540,26 @@ class _HomeScreenState extends State<HomeScreen> {
         totalCarbs += _safeNum(foodData['carbs']);
         totalProtein += _safeNum(foodData['protein']);
         totalFat += _safeNum(foodData['fat']);
-        totalGrams += _safeNum(foodData['gramsAmount']);
+
+        final rawQuantity =
+            foodData['quantity'] ?? foodData['gramsAmount'] ?? foodData['grams'];
+        final quantity = rawQuantity is num
+            ? rawQuantity.toDouble()
+            : double.tryParse(rawQuantity?.toString() ?? '');
+        final unit = foodData['unit']?.toString().trim();
+
+        if (quantity != null && quantity > 0) {
+          hasQuantity = true;
+          totalQuantity += quantity;
+          if (unit != null && unit.isNotEmpty) {
+            if (!hasQuantityUnit) {
+              quantityUnit = unit;
+              hasQuantityUnit = true;
+            } else if (quantityUnit != unit) {
+              mixedUnits = true;
+            }
+          }
+        }
       }
 
       // Create ONE meal entry with combined data
@@ -547,7 +570,8 @@ class _HomeScreenState extends State<HomeScreen> {
         'carbs': totalCarbs,
         'protein': totalProtein,
         'fat': totalFat,
-        'grams': totalGrams,
+        'quantity': hasQuantity ? totalQuantity : null,
+        'unit': mixedUnits ? 'items' : quantityUnit,
         'mealType': mealData['mealType'] ?? 'Meal',
         'time': mealData['time'] ?? '',
         'date': mealData['date'] ?? '',
@@ -569,7 +593,11 @@ class _HomeScreenState extends State<HomeScreen> {
         'carbs': data['carbs'] ?? 0,
         'protein': data['protein'] ?? 0,
         'fat': data['fat'] ?? 0,
-        'grams': data['grams'] ?? 100,
+        'quantity':
+            _parseQuantityValue(data['quantity']) ??
+            _parseQuantityValue(data['grams']) ??
+            _parseQuantityValue(data['baselineQuantity']),
+        'unit': data['unit']?.toString() ?? 'g',
         'mealType': data['mealType'] ?? 'Meal',
         'time': data['time'] ?? '',
         'date': data['date'] ?? '',
@@ -591,6 +619,32 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     return allMeals;
+  }
+
+  double? _parseQuantityValue(dynamic rawValue) {
+    if (rawValue is num) return rawValue.toDouble();
+    if (rawValue == null) return null;
+    return double.tryParse(rawValue.toString());
+  }
+
+  String _formatMealQuantity(Map<String, dynamic> meal) {
+    final quantity = _parseQuantityValue(meal['quantity']);
+    final unit = meal['unit']?.toString().trim();
+    if (quantity == null || quantity <= 0) return '';
+
+    final quantityText = quantity % 1 == 0
+        ? quantity.toStringAsFixed(0)
+        : quantity.toStringAsFixed(1);
+
+    if (unit == null || unit.isEmpty) {
+      return quantityText;
+    }
+
+    if (unit == 'items') {
+      return '$quantityText items';
+    }
+
+    return '$quantityText $unit';
   }
 
   @override
@@ -1105,6 +1159,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       );
                                       final isGrouped =
                                           meal['isGrouped'] == true;
+                                      final quantityText =
+                                          _formatMealQuantity(meal);
 
                                       return Container(
                                         width: double.infinity,
@@ -1233,9 +1289,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                                         color: Colors.black87,
                                                       ),
                                                     ),
-                                                    if (meal['grams'] != null)
+                                                    if (quantityText.isNotEmpty)
                                                       Text(
-                                                        '${_safeNum(meal['grams'])}g',
+                                                        quantityText,
                                                         style: TextStyle(
                                                           fontSize: 12,
                                                           color:

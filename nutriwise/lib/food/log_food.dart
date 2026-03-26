@@ -247,7 +247,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
       );
 
       // Enhanced barcode lookup with multiple sources
-      String productName = await _enhancedBarcodeLookup(barcode);
+      final String? productName = await _enhancedBarcodeLookup(barcode);
 
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
 
@@ -268,7 +268,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
     }
   }
 
-  Future<String> _enhancedBarcodeLookup(String barcode) async {
+  Future<String?> _enhancedBarcodeLookup(String barcode) async {
     final List<Future<String?>> lookups = [
       _lookupBarcodeList(barcode),
       _lookupOpenFoodFacts(barcode),
@@ -281,7 +281,9 @@ class _LogFoodModalState extends State<LogFoodModal> {
     for (var lookup in lookups) {
       try {
         final result = await lookup.timeout(const Duration(seconds: 10));
-        if (result != null && result != 'Unknown Product' && result.isNotEmpty) {
+        if (result != null &&
+            result.toString().trim().isNotEmpty &&
+            result != 'Unknown Product') {
           return result;
         }
       } catch (e) {
@@ -291,7 +293,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
     }
 
     // Fallback if all lookups fail
-    return 'Unknown Product (Barcode: $barcode)';
+    return null;
   }
 
   Future<String?> _lookupBarcodeList(String barcode) async {

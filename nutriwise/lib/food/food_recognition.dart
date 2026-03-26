@@ -665,22 +665,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
 
     // Create animations with curves
-    _calorieAnimation = CurvedAnimation(
-      parent: _calorieAnimationController,
-      curve: Curves.easeOutCubic,
-    );
-    _carbsAnimation = CurvedAnimation(
-      parent: _carbsAnimationController,
-      curve: Curves.easeOutCubic,
-    );
-    _proteinAnimation = CurvedAnimation(
-      parent: _proteinAnimationController,
-      curve: Curves.easeOutCubic,
-    );
-    _fatAnimation = CurvedAnimation(
-      parent: _fatAnimationController,
-      curve: Curves.easeOutCubic,
-    );
+   _calorieAnimation = _calorieAnimationController;
+_carbsAnimation   = _carbsAnimationController;
+_proteinAnimation = _proteinAnimationController;
+_fatAnimation     = _fatAnimationController;
 
     _fetchUserGoalsAndTodayIntake().then((_) {
       _loadModelsAndProcess();
@@ -2476,7 +2464,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         todayProteinConsumed + (thisMealMacros['protein'] ?? 0);
     final fatAfterMeal = todayFatConsumed + (thisMealMacros['fat'] ?? 0);
 
-    // Calculate ACTUAL progress percentages (0.0 to kMaxAnimationProgress, or higher if exceeded)
+    // Progress percentages (may exceed 1.0 when over target; used for labels/colors).
     final calorieProgress = dailyGoal > 0
         ? (caloriesAfterMeal / dailyGoal).clamp(0.0, kMaxAnimationProgress)
         : 0.0;
@@ -2490,8 +2478,8 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         ? (fatAfterMeal / fatTarget).clamp(0.0, kMaxAnimationProgress)
         : 0.0;
 
-    // ✅ FIX: Animate to ACTUAL progress (clamped to 1.0 for visual display)
-    // The painter will handle overflow visualization separately
+    // Animate the ring sweep to the display progress clamped to 1.0.
+    // Overflow is communicated via red color + overflow text.
     _calorieAnimationController.animateTo(calorieProgress.clamp(0.0, 1.0));
     _carbsAnimationController.animateTo(carbsProgress.clamp(0.0, 1.0));
     _proteinAnimationController.animateTo(proteinProgress.clamp(0.0, 1.0));
@@ -3032,6 +3020,18 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         ? (caloriesAfterMeal / dailyGoal).clamp(0.0, kMaxAnimationProgress)
         : 0.0;
 
+    // Geometry constants used to keep arc + text visually aligned.
+    // (The painters use the same center/radius math.)
+    const double ringWidth = 180;
+    const double ringHeight = 120;
+    const double ringStrokeWidth = 8;
+    final double ringRadius = math.min(
+      (ringWidth / 2) - ringStrokeWidth / 2,
+      ringHeight - ringStrokeWidth / 2,
+    );
+    final double ringArcTop = (ringHeight - ringStrokeWidth / 2) - ringRadius;
+    final double ringTextTop = ringArcTop + ringRadius * 0.25;
+
     return Container(
       margin: const EdgeInsets.all(16),
       child: Column(
@@ -3143,7 +3143,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                   animation: _calorieAnimation,
                   builder: (context, child) {
                     return CustomPaint(
-                      size: const Size(150, 180),
+                      size: const Size(ringWidth, ringHeight),
                       painter: AnimatedSemiCircleProgressPainter(
                         progress: percentage,
                         backgroundColor: Colors.grey[200]!,
@@ -3156,7 +3156,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                     );
                   },
                 ),
-                Center(
+                Positioned(
+                  top: ringTextTop,
+                  left: 0,
+                  right: 0,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -3167,9 +3170,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: caloriesLeft >= 0
-                              ? Colors.black87
-                              : Colors.red,
+                          color: caloriesLeft >= 0 ? Colors.black87 : Colors.red,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -3177,9 +3178,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                         caloriesLeft >= 0 ? 'kcal left' : 'kcal over',
                         style: TextStyle(
                           fontSize: 12,
-                          color: caloriesLeft >= 0
-                              ? Colors.grey[600]
-                              : Colors.red[400],
+                          color: caloriesLeft >= 0 ? Colors.grey[600] : Colors.red[400],
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -3235,8 +3234,20 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     int left, {
     double size = 50,
   }) {
-    // ✅ FIX: Calculate ACTUAL progress (not clamped yet)
-    double progress = target > 0 ? (current / target) : 0.0;
+    // Progress ratio for labels/colors (arc sweep itself is capped to 0..1).
+    final double progress = target > 0
+        ? (current / target).clamp(0.0, kMaxAnimationProgress)
+        : 0.0;
+
+    // Geometry constants used to keep arc + text visually aligned.
+    const double strokeWidth = 4;
+    final double chartHeight = size * 0.82;
+    final double radius = math.min(
+      (size / 2) - strokeWidth / 2,
+      chartHeight - strokeWidth / 2,
+    );
+    final double arcTop = (chartHeight - strokeWidth / 2) - radius;
+    final double textTop = arcTop + radius * 0.20;
 
     return Column(
       children: [
@@ -3251,7 +3262,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         const SizedBox(height: 8),
         SizedBox(
           width: size,
-          height: size,
+          height: chartHeight,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -3259,18 +3270,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                 animation: _getMacroAnimation(label),
                 builder: (context, child) {
                   return CustomPaint(
-                    size: Size(size, size),
+                    size: Size(size, chartHeight),
                     painter: AnimatedSemiCircleProgressPainter(
-                      progress: progress, // ✅ Pass actual progress
+                      progress: progress,
                       backgroundColor: Colors.grey[200]!,
                       progressColor: left >= 0 ? color : Colors.red,
-                      strokeWidth: 4,
+                      strokeWidth: strokeWidth,
                       animation: _getMacroAnimation(label),
                     ),
                   );
                 },
               ),
-              Center(
+              Positioned(
+                top: textTop,
+                left: 0,
+                right: 0,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -5700,8 +5714,9 @@ class SemiCircleProgressPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) - strokeWidth / 2;
+    final radius =
+        math.min((size.width / 2) - strokeWidth / 2, size.height - strokeWidth / 2);
+    final center = Offset(size.width / 2, size.height - strokeWidth / 2);
 
     final backgroundPaint = Paint()
       ..color = backgroundColor
@@ -5762,8 +5777,9 @@ class AnimatedSemiCircleProgressPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) - strokeWidth / 2;
+    final radius =
+        math.min((size.width / 2) - strokeWidth / 2, size.height - strokeWidth / 2);
+    final center = Offset(size.width / 2, size.height - strokeWidth / 2);
 
     final backgroundPaint = Paint()
       ..color = backgroundColor
@@ -5786,8 +5802,7 @@ class AnimatedSemiCircleProgressPainter extends CustomPainter {
       backgroundPaint,
     );
 
-    // ✅ FIX: Use animation.value directly (which represents the actual progress)
-    // The animation controller is already set to the correct progress value
+    // animation.value is the animated display progress (controllers clamp to 0..1).
     final displayProgress = animation.value.clamp(0.0, 1.0);
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
