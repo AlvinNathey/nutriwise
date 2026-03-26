@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:nutriwise/food/edit_food_log.dart'; // Import the new edit page
+import 'package:nutriwise/food/edit_food_log.dart';
+
+// ─────────────────────────────────────────────────────────────────
+// Models
+// ─────────────────────────────────────────────────────────────────
 
 class FoodLog {
   final String id;
@@ -10,9 +14,9 @@ class FoodLog {
   final String foodName;
   final int calories;
   final DateTime createdAt;
-  final String? imageUrl; // NEW: For meal image
-  final bool isMeal; // NEW: Distinguish meal vs barcode
-  final List<Map<String, dynamic>>? foodItems; // NEW: For meal foods
+  final String? imageUrl;
+  final bool isMeal;
+  final List<Map<String, dynamic>>? foodItems;
 
   FoodLog({
     required this.id,
@@ -27,7 +31,32 @@ class FoodLog {
   });
 }
 
-// Fetch barcode logs (old)
+enum SectionType { day, weekChild, monthParent, dayChild }
+
+class TimelineSection {
+  final String id;
+  final String title;
+  final DateTime sortDate;
+  final List<FoodLog> logs;
+  final SectionType type;
+  final String? parentId;
+
+  TimelineSection({
+    required this.id,
+    required this.title,
+    required this.sortDate,
+    required this.type,
+    this.parentId,
+    List<FoodLog>? logs,
+  }) : logs = logs ?? [];
+
+  int get totalCalories => logs.fold(0, (sum, log) => sum + log.calories);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Data Fetching
+// ─────────────────────────────────────────────────────────────────
+
 Future<List<FoodLog>> fetchLoggedFoods() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return [];
@@ -41,19 +70,11 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
 
   return snapshot.docs.map((doc) {
     final data = doc.data();
-    final createdAt = data['createdAt'];
-    DateTime date = DateTime.now();
-    String timeStr = '';
-    if (createdAt is Timestamp) {
-      date = createdAt.toDate();
-      final hour = date.hour > 12 ? date.hour - 12 : date.hour;
-      final ampm = date.hour >= 12 ? 'pm' : 'am';
-      timeStr = '${hour == 0 ? 12 : hour}:${date.minute.toString().padLeft(2, '0')} $ampm';
-    }
+    final date = _parseCreatedAt(data['createdAt']);
     return FoodLog(
       id: doc.id,
       mealType: (data['mealType'] ?? 'Meal').toString(),
-      time: timeStr,
+      time: _formatTimeFromDate(date),
       foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
       calories: (data['calories'] ?? 0).round(),
       createdAt: date,
@@ -62,7 +83,6 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
   }).toList();
 }
 
-// NEW: Fetch meals from 'meals' subcollection
 Future<List<FoodLog>> fetchMealLogs() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return [];
@@ -76,74 +96,255 @@ Future<List<FoodLog>> fetchMealLogs() async {
 
   return snapshot.docs.map((doc) {
     final data = doc.data();
-    final createdAt = data['createdAt'];
-    DateTime date = DateTime.now();
-    String timeStr = '';
-    if (createdAt is Timestamp) {
-      date = createdAt.toDate();
-      timeStr = (data['time'] ?? '').toString();
-    }
-    // Show first food name or "Meal"
-    String foodName = "Meal";
+    final date = _parseCreatedAt(data['createdAt']);
+    String foodName = 'Meal';
     if (data['foodItems'] is List && (data['foodItems'] as List).isNotEmpty) {
-      foodName = (data['foodItems'][0]['foodName'] ?? "Meal").toString();
+      foodName = (data['foodItems'][0]['foodName'] ?? 'Meal').toString();
     }
     return FoodLog(
       id: doc.id,
       mealType: (data['mealType'] ?? 'Meal').toString(),
-      time: timeStr,
+      time: _formatTimeTo12Hour(
+        (data['time'] ?? '').toString(),
+        fallback: date,
+      ),
       foodName: foodName,
       calories: (data['totalCalories'] ?? 0).round(),
       createdAt: date,
       imageUrl: data['originalImageUrl'] as String?,
       isMeal: true,
       foodItems: (data['foodItems'] as List<dynamic>?)
-          ?.map((e) => Map<String, dynamic>.from(e as Map)).toList(),
+          ?.map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
     );
   }).toList();
 }
 
-// Helper to group logs by timeline section (barcode + meal logs)
-Map<String, List<FoodLog>> groupLogsByTimeline(List<FoodLog> logs) {
-  final now = DateTime.now();
-  Map<String, List<FoodLog>> grouped = {};
+// ─────────────────────────────────────────────────────────────────
+// Timeline Grouping Logic
+// ─────────────────────────────────────────────────────────────────
 
-  for (var log in logs) {
-    final logDate = DateTime(log.createdAt.year, log.createdAt.month, log.createdAt.day);
-    final today = DateTime(now.year, now.month, now.day);
+List<TimelineSection> groupLogsByTimeline(List<FoodLog> logs) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final Map<String, TimelineSection> grouped = {};
+  final Map<String, Map<String, TimelineSection>> monthWeekGrouped = {};
+
+  for (final log in logs) {
+    final logDate = DateTime(
+      log.createdAt.year,
+      log.createdAt.month,
+      log.createdAt.day,
+    );
     final diff = today.difference(logDate).inDays;
 
-    String section;
     if (diff == 0) {
-      section = 'Today';
+      grouped.putIfAbsent(
+        'today',
+        () => TimelineSection(
+          id: 'today',
+          title: 'Today',
+          sortDate: today,
+          type: SectionType.day,
+        ),
+      );
+      grouped['today']!.logs.add(log);
     } else if (diff == 1) {
-      section = 'Yesterday';
-    } else if (diff == 2) {
-      section = '2 days ago';
-    } else if (diff == 3) {
-      section = '3 days ago';
-    } else if (diff < 7) {
-      section = '${diff} days ago';
+      grouped.putIfAbsent(
+        'yesterday',
+        () => TimelineSection(
+          id: 'yesterday',
+          title: 'Yesterday',
+          sortDate: today.subtract(const Duration(days: 1)),
+          type: SectionType.day,
+        ),
+      );
+      grouped['yesterday']!.logs.add(log);
+    } else if (diff >= 2 && diff <= 6) {
+      final sectionId = 'day-${_isoDate(logDate)}';
+      grouped.putIfAbsent(
+        sectionId,
+        () => TimelineSection(
+          id: sectionId,
+          title: '${_weekdayName(logDate.weekday)}, ${_dayMonth(logDate)}',
+          sortDate: logDate,
+          type: SectionType.day,
+        ),
+      );
+      grouped[sectionId]!.logs.add(log);
+    } else if (diff >= 7 && diff <= 13) {
+      final sectionId = 'lastweek-${_isoDate(logDate)}';
+      grouped.putIfAbsent(
+        sectionId,
+        () => TimelineSection(
+          id: sectionId,
+          title:
+              'Last Week · ${_weekdayName(logDate.weekday)}, ${_dayMonth(logDate)}',
+          sortDate: logDate,
+          type: SectionType.day,
+        ),
+      );
+      grouped[sectionId]!.logs.add(log);
     } else {
-      section = 'Last week';
+      final monthKey =
+          'month-${logDate.year}-${logDate.month.toString().padLeft(2, '0')}';
+      final monthTitle = _monthYear(logDate);
+      final weekOfMonth = ((logDate.day - 1) ~/ 7) + 1;
+      final weekKey = '$monthKey-week$weekOfMonth';
+      final weekRangeLabel = _weekRangeLabel(logDate);
+
+      grouped.putIfAbsent(
+        monthKey,
+        () => TimelineSection(
+          id: monthKey,
+          title: monthTitle,
+          sortDate: DateTime(logDate.year, logDate.month, 1),
+          type: SectionType.monthParent,
+        ),
+      );
+
+      monthWeekGrouped.putIfAbsent(monthKey, () => {});
+      monthWeekGrouped[monthKey]!.putIfAbsent(
+        weekKey,
+        () => TimelineSection(
+          id: weekKey,
+          title: weekRangeLabel,
+          sortDate: logDate,
+          type: SectionType.weekChild,
+          parentId: monthKey,
+        ),
+      );
+      monthWeekGrouped[monthKey]![weekKey]!.logs.add(log);
     }
-
-    grouped.putIfAbsent(section, () => []);
-    grouped[section]!.add(log);
   }
 
-  // Sort sections: Today, Yesterday, 2 days ago, 3 days ago, ..., Last week
-  final orderedSections = ['Today', 'Yesterday', '2 days ago', '3 days ago', 'Last week'];
-  Map<String, List<FoodLog>> ordered = {};
-  for (var sec in orderedSections) {
-    if (grouped.containsKey(sec)) ordered[sec] = grouped[sec]!;
+  final List<TimelineSection> sections = [];
+
+  final recentSections = grouped.values
+      .where((s) => s.type == SectionType.day)
+      .toList()
+    ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+  sections.addAll(recentSections);
+
+  final monthSections = grouped.values
+      .where((s) => s.type == SectionType.monthParent)
+      .toList()
+    ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+
+  for (final month in monthSections) {
+    sections.add(month);
+    final weeks = (monthWeekGrouped[month.id]?.values.toList() ?? [])
+      ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+    sections.addAll(weeks);
   }
-  // Add any other sections (e.g., "4 days ago") not in orderedSections
-  for (var sec in grouped.keys) {
-    if (!orderedSections.contains(sec)) ordered[sec] = grouped[sec]!;
+
+  for (final section in sections) {
+    section.logs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
-  return ordered;
+
+  return sections;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────
+
+String _isoDate(DateTime d) => d.toIso8601String().split('T').first;
+
+String _weekdayName(int weekday) {
+  const names = {
+    DateTime.monday: 'Monday',
+    DateTime.tuesday: 'Tuesday',
+    DateTime.wednesday: 'Wednesday',
+    DateTime.thursday: 'Thursday',
+    DateTime.friday: 'Friday',
+    DateTime.saturday: 'Saturday',
+    DateTime.sunday: 'Sunday',
+  };
+  return names[weekday] ?? '';
+}
+
+String _monthYear(DateTime date) {
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return '${months[date.month - 1]} ${date.year}';
+}
+
+String _shortMonth(DateTime date) {
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  return months[date.month - 1];
+}
+
+String _dayMonth(DateTime date) {
+  return '${_ordinal(date.day)} ${_shortMonth(date)}';
+}
+
+String _weekRangeLabel(DateTime date) {
+  final daysInMonth = [
+    0, 31,
+    date.year % 4 == 0 ? 29 : 28,
+    31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+  ];
+  final weekOfMonth = ((date.day - 1) ~/ 7) + 1;
+  final startDay = (weekOfMonth - 1) * 7 + 1;
+  final endDay = (startDay + 6).clamp(startDay, daysInMonth[date.month]);
+  return '${_ordinal(startDay)} – ${_ordinal(endDay)} ${_shortMonth(date)}';
+}
+
+String _ordinal(int day) {
+  if (day >= 11 && day <= 13) return '${day}th';
+  switch (day % 10) {
+    case 1: return '${day}st';
+    case 2: return '${day}nd';
+    case 3: return '${day}rd';
+    default: return '${day}th';
+  }
+}
+
+DateTime _parseCreatedAt(dynamic value) {
+  if (value is Timestamp) return value.toDate();
+  if (value is DateTime) return value;
+  if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+  if (value is String) return DateTime.tryParse(value) ?? DateTime.now();
+  return DateTime.now();
+}
+
+String _formatTimeFromDate(DateTime date) {
+  final period = date.hour >= 12 ? 'PM' : 'AM';
+  final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
+  return '$hour12:${date.minute.toString().padLeft(2, '0')} $period';
+}
+
+String _formatTimeTo12Hour(String raw, {required DateTime fallback}) {
+  final value = raw.trim();
+  if (value.isEmpty) return _formatTimeFromDate(fallback);
+  final regex = RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?$');
+  final match = regex.firstMatch(value);
+  if (match == null) return _formatTimeFromDate(fallback);
+  int hour = int.tryParse(match.group(1) ?? '') ?? fallback.hour;
+  final minute = int.tryParse(match.group(2) ?? '') ?? fallback.minute;
+  final amPm = match.group(3)?.toUpperCase();
+  if (minute < 0 || minute > 59) return _formatTimeFromDate(fallback);
+  if (amPm != null) {
+    if (hour < 1 || hour > 12) return _formatTimeFromDate(fallback);
+    if (amPm == 'AM' && hour == 12) hour = 0;
+    else if (amPm == 'PM' && hour != 12) hour += 12;
+  } else {
+    if (hour < 0 || hour > 23) return _formatTimeFromDate(fallback);
+  }
+  return _formatTimeFromDate(
+    DateTime(fallback.year, fallback.month, fallback.day, hour, minute),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────────
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({Key? key}) : super(key: key);
@@ -153,27 +354,36 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  late Future<List<FoodLog>> _logsFuture;
+  late Future<List<TimelineSection>> _sectionsFuture;
+  final Map<String, bool> _expandedSections = {};
 
   @override
   void initState() {
     super.initState();
-    _logsFuture = _fetchAllLogs();
+    _sectionsFuture = _fetchAndGroup();
+  }
+
+  Future<List<TimelineSection>> _fetchAndGroup() async {
+    final results = await Future.wait([
+      fetchLoggedFoods(),
+      fetchMealLogs(),
+    ]);
+    final allLogs = [...results[0], ...results[1]]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return groupLogsByTimeline(allLogs);
   }
 
   void _refreshLogs() {
     setState(() {
-      _logsFuture = _fetchAllLogs();
+      _sectionsFuture = _fetchAndGroup();
     });
   }
 
-  // NEW: Fetch both barcode logs and meal logs, combine and sort
-  Future<List<FoodLog>> _fetchAllLogs() async {
-    final barcodeLogs = await fetchLoggedFoods();
-    final mealLogs = await fetchMealLogs();
-    final allLogs = [...barcodeLogs, ...mealLogs];
-    allLogs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return allLogs;
+  bool _isSectionExpanded(TimelineSection section) {
+    if (_expandedSections.containsKey(section.id)) {
+      return _expandedSections[section.id]!;
+    }
+    return section.type == SectionType.day;
   }
 
   @override
@@ -185,9 +395,7 @@ class _HistoryPageState extends State<HistoryPage> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () {
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Timeline',
@@ -199,8 +407,8 @@ class _HistoryPageState extends State<HistoryPage> {
         ),
         centerTitle: true,
       ),
-      body: FutureBuilder<List<FoodLog>>(
-        future: _logsFuture,
+      body: FutureBuilder<List<TimelineSection>>(
+        future: _sectionsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -208,45 +416,282 @@ class _HistoryPageState extends State<HistoryPage> {
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(child: Text('No foods logged yet.'));
           }
-          final logs = snapshot.data!;
-          final grouped = groupLogsByTimeline(logs);
-          final sectionKeys = grouped.keys.toList();
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: sectionKeys.length,
-            itemBuilder: (context, idx) {
-              final key = sectionKeys[idx];
-              final meals = grouped[key]!;
-              final isFirst = idx == 0;
-              final isLast = idx == sectionKeys.length - 1;
-              return _buildDaySection(key, meals, isFirst: isFirst, isLast: isLast, context: context);
-            },
+          final sections = snapshot.data!;
+
+          return RefreshIndicator(
+            color: Colors.green,
+            onRefresh: () async => _refreshLogs(),
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              itemCount: sections.length,
+              itemBuilder: (context, idx) {
+                final section = sections[idx];
+                final isFirstSection = idx == 0;
+                final isLastSection = idx == sections.length - 1;
+
+                if (section.type == SectionType.monthParent) {
+                  return _buildMonthHeader(section);
+                }
+
+                if (section.type == SectionType.weekChild) {
+                  final parentExpanded =
+                      _expandedSections[section.parentId] ?? false;
+                  if (!parentExpanded) return const SizedBox.shrink();
+                  return _buildWeekSection(section);
+                }
+
+                return _buildDaySection(
+                  section,
+                  isFirst: isFirstSection,
+                  isLast: isLastSection,
+                );
+              },
+            ),
           );
         },
       ),
     );
   }
 
-  Widget _buildDaySection(String day, List<FoodLog> meals, {bool isFirst = false, bool isLast = false, required BuildContext context}) {
+  // ── Month parent header ────────────────────────────────────────
+
+  Widget _buildMonthHeader(TimelineSection section) {
+    final isExpanded = _expandedSections[section.id] ?? false;
+
+    return GestureDetector(
+      onTap: () => setState(() {
+        _expandedSections[section.id] = !isExpanded;
+      }),
+      child: Container(
+        margin: const EdgeInsets.only(top: 20, bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.green.withOpacity(0.20)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isExpanded
+                  ? Icons.keyboard_arrow_down_rounded
+                  : Icons.keyboard_arrow_right_rounded,
+              color: Colors.green,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              section.title,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.green,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              isExpanded ? 'Collapse' : 'Expand',
+              style: TextStyle(fontSize: 11, color: Colors.green.shade400),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Week child section ─────────────────────────────────────────
+
+  Widget _buildWeekSection(TimelineSection section) {
+    final isExpanded = _expandedSections[section.id] ?? false;
+    final mealCount = section.logs.length;
+    final calTotal = section.totalCalories;
+
+    // Group logs by individual day within this week
+    final Map<String, List<FoodLog>> dayGroups = {};
+    final Map<String, DateTime> dayDates = {};
+
+    for (final log in section.logs) {
+      final logDate = DateTime(
+        log.createdAt.year,
+        log.createdAt.month,
+        log.createdAt.day,
+      );
+      final dayKey = _isoDate(logDate);
+      dayGroups.putIfAbsent(dayKey, () => []).add(log);
+      dayDates[dayKey] = logDate;
+    }
+
+    final sortedDayKeys = dayGroups.keys.toList()
+      ..sort((a, b) => dayDates[b]!.compareTo(dayDates[a]!));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Week header ──
+        GestureDetector(
+          onTap: () => setState(() {
+            _expandedSections[section.id] = !isExpanded;
+          }),
+          child: Container(
+            margin: const EdgeInsets.only(top: 8, bottom: 4, left: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.keyboard_arrow_right_rounded,
+                  size: 16,
+                  color: Colors.grey.shade500,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  section.title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '$mealCount meal${mealCount == 1 ? '' : 's'}  ·  $calTotal kcal',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Expanded: individual days within this week ──
+        if (isExpanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: sortedDayKeys.map((dayKey) {
+                final dayDate = dayDates[dayKey]!;
+                final dayLogs = dayGroups[dayKey]!;
+                final dayId = '${section.id}-$dayKey';
+                final isDayExpanded = _expandedSections[dayId] ?? true;
+                final dayMealCount = dayLogs.length;
+                final dayCalTotal =
+                    dayLogs.fold(0, (sum, l) => sum + l.calories);
+                final dayLabel =
+                    '${_weekdayName(dayDate.weekday)}, ${_ordinal(dayDate.day)} ${_shortMonth(dayDate)}';
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Day sub-header ──
+                    GestureDetector(
+                      onTap: () => setState(() {
+                        _expandedSections[dayId] = !isDayExpanded;
+                      }),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 10, bottom: 6),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.5),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              dayLabel,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '$dayMealCount meal${dayMealCount == 1 ? '' : 's'}  ·  $dayCalTotal kcal',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.grey.shade400,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              isDayExpanded
+                                  ? Icons.keyboard_arrow_up_rounded
+                                  : Icons.keyboard_arrow_down_rounded,
+                              size: 14,
+                              color: Colors.grey.shade400,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // ── Meal cards for this day ──
+                    if (isDayExpanded)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 14),
+                        child: Column(
+                          children: dayLogs
+                              .map(
+                                (meal) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: meal.isMeal
+                                      ? _buildMealLogCard(context, meal)
+                                      : _buildFoodLogCard(context, meal),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // ── Day section (recent) ───────────────────────────────────────
+
+  Widget _buildDaySection(
+    TimelineSection section, {
+    bool isFirst = false,
+    bool isLast = false,
+  }) {
+    final isExpanded = _isSectionExpanded(section);
+    final mealCount = section.logs.length;
+    final calTotal = section.totalCalories;
+
     return Stack(
       children: [
-        // Draw line above the dot unless it's the first section
         if (!isFirst)
           Positioned(
             left: 3.5,
             top: 0,
             child: Container(
               width: 1,
-              height: 24,
+              height: 28,
               color: Colors.green.withOpacity(0.3),
             ),
           ),
-        // Draw line below the dot unless it's the last section
         if (!isLast)
           Positioned(
             left: 3.5,
-            top: 32,
+            top: 36,
             bottom: 0,
             child: Container(
               width: 1,
@@ -256,40 +701,69 @@ class _HistoryPageState extends State<HistoryPage> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (!isFirst) const SizedBox(height: 24),
-            Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: Colors.green,
-                    shape: BoxShape.circle,
+            if (!isFirst) const SizedBox(height: 28),
+            GestureDetector(
+              onTap: () => setState(() {
+                _expandedSections[section.id] =
+                    !(_expandedSections[section.id] ?? isExpanded);
+              }),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  day,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      section.title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.only(left: 16),
-              child: Column(
-                children: meals.map((meal) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: meal.isMeal
-                      ? _buildMealLogCard(context, meal)
-                      : _buildFoodLogCard(context, meal),
-                )).toList(),
+                  Text(
+                    '$mealCount meal${mealCount == 1 ? '' : 's'}  ·  $calTotal kcal',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade500,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 16,
+                    color: Colors.grey.shade400,
+                  ),
+                ],
               ),
             ),
+            if (isExpanded) ...[
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Column(
+                  children: section.logs
+                      .map(
+                        (meal) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: meal.isMeal
+                              ? _buildMealLogCard(context, meal)
+                              : _buildFoodLogCard(context, meal),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
           ],
         ),
@@ -297,22 +771,18 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  // NEW: Card for meal logs (with image on left)
+  // ── Meal log card ──────────────────────────────────────────────
+
   Widget _buildMealLogCard(BuildContext context, FoodLog log) {
     return GestureDetector(
       onTap: () async {
-        // TODO: Implement meal edit page if needed
-        // await Navigator.of(context).push(...);
-        // _refreshLogs();
+        // TODO: Navigate to meal edit page
       },
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Colors.green.shade200,
-            width: 1,
-          ),
+          border: Border.all(color: Colors.green.shade200),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.05),
@@ -323,7 +793,6 @@ class _HistoryPageState extends State<HistoryPage> {
         ),
         child: Row(
           children: [
-            // Image on left
             ClipRRect(
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(12),
@@ -335,19 +804,9 @@ class _HistoryPageState extends State<HistoryPage> {
                       width: 80,
                       height: 80,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        width: 80,
-                        height: 80,
-                        color: Colors.grey[200],
-                        child: const Icon(Icons.image, color: Colors.grey),
-                      ),
+                      errorBuilder: (_, __, ___) => _imagePlaceholder(),
                     )
-                  : Container(
-                      width: 80,
-                      height: 80,
-                      color: Colors.grey[200],
-                      child: const Icon(Icons.image, color: Colors.grey),
-                    ),
+                  : _imagePlaceholder(),
             ),
             Expanded(
               child: Padding(
@@ -377,29 +836,21 @@ class _HistoryPageState extends State<HistoryPage> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    // Show all food names, comma separated
-                    if (log.foodItems != null && log.foodItems!.isNotEmpty)
-                      Text(
-                        log.foodItems!
-                            .map((f) => (f['foodName'] as String?) ?? '')
-                            .where((n) => n != null && n!.isNotEmpty)
-                            .map((n) => n!)
-                            .join(', '),
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.black87,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      )
-                    else
-                      Text(
-                        log.foodName,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.black87,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    Text(
+                      log.foodItems != null && log.foodItems!.isNotEmpty
+                          ? log.foodItems!
+                              .map((f) => (f['foodName'] as String?) ?? '')
+                              .where((n) => n.isNotEmpty)
+                              .join(', ')
+                          : log.foodName,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
+                        fontWeight: FontWeight.bold,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       '${log.calories} kcal',
@@ -418,6 +869,15 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
+  Widget _imagePlaceholder() => Container(
+        width: 80,
+        height: 80,
+        color: Colors.grey[200],
+        child: const Icon(Icons.image, color: Colors.grey),
+      );
+
+  // ── Barcode scanned food card ──────────────────────────────────
+
   Widget _buildFoodLogCard(BuildContext context, FoodLog log) {
     return GestureDetector(
       onTap: () async {
@@ -426,16 +886,13 @@ class _HistoryPageState extends State<HistoryPage> {
             builder: (_) => EditFoodLogPage(foodLogId: log.id),
           ),
         );
-        _refreshLogs(); // Refresh after returning from edit
+        _refreshLogs();
       },
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Colors.grey.shade300,
-            width: 1,
-          ),
+          border: Border.all(color: Colors.grey.shade300),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.05),
@@ -450,15 +907,7 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               Column(
                 children: [
-                  Container(
-                    width: 60,
-                    height: 36,
-                    decoration: BoxDecoration(
-                     
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.qr_code_2, size: 36, color: Colors.green),
-                  ),
+                  const Icon(Icons.qr_code_2, size: 36, color: Colors.green),
                   const SizedBox(height: 4),
                   const Text(
                     'Scanned',
@@ -503,6 +952,8 @@ class _HistoryPageState extends State<HistoryPage> {
                         fontSize: 14,
                         color: Colors.black87,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Text(
