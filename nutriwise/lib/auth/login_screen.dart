@@ -70,7 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
             try {
               didAuthenticate = await auth.authenticate(
                 localizedReason: 'Please use fingerprint or Face ID to log in.',
-                options: const AuthenticationOptions(biometricOnly: true),
+                biometricOnly: true,
               );
               print('[DEBUG] Biometric authentication result: $didAuthenticate');
             } catch (e) {

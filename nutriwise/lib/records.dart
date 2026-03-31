@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/services.dart';
 import 'package:nutriwise/services/auth_services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -1227,8 +1230,6 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           const SizedBox(height: 24),
           _buildWeightTrackingSection(),
           const SizedBox(height: 24),
-          _buildDailyCaloriesSection(),
-          const SizedBox(height: 24),
           _buildTopMealsSection(),
           const SizedBox(height: 32),
           // Download Button
@@ -2248,86 +2249,91 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
     );
   }
 
+  String get _reportFileName =>
+      'NutriWise_Report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf';
+
+  Future<pw.Document> _buildPdfDocument() async {
+    final pdf = pw.Document();
+
+    // Build main content (summary sections)
+    final mainContent = [
+      _buildPDFHeader(),
+      pw.SizedBox(height: 20),
+      _buildPDFSummary(),
+      pw.SizedBox(height: 20),
+      _buildPDFMacronutrients(),
+      pw.SizedBox(height: 20),
+      _buildPDFMealDistribution(),
+      pw.SizedBox(height: 20),
+      _buildPDFWeightTracking(),
+      pw.SizedBox(height: 20),
+      _buildPDFTopMeals(),
+      pw.SizedBox(height: 20),
+    ];
+
+    // Add main content page
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
+        maxPages: 100, // Set high limit for main content
+        build: (context) => [...mainContent, _buildPDFFooter()],
+      ),
+    );
+
+    // Handle meal details table separately to avoid page limit issues
+    final mealsDetails = _reportData['mealsDetails'] as List<Map<String, dynamic>>;
+    if (mealsDetails.isNotEmpty) {
+      // Limit to 200 meals to prevent excessive pages (reduced from 500)
+      final limitedMeals = mealsDetails.length > 200
+          ? mealsDetails.sublist(0, 200)
+          : mealsDetails;
+
+      // Split meals into chunks of 20 per page to ensure they fit
+      const mealsPerPage = 20;
+      for (int i = 0; i < limitedMeals.length; i += mealsPerPage) {
+        final chunk = limitedMeals.sublist(
+          i,
+          i + mealsPerPage > limitedMeals.length
+              ? limitedMeals.length
+              : i + mealsPerPage,
+        );
+        final isLastPage = i + chunk.length >= limitedMeals.length;
+
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat.a4,
+            margin: const pw.EdgeInsets.all(32),
+            build: (context) => _buildPDFMealDetailsTableForChunk(
+              chunk,
+              i == 0, // Show header only on first page
+              isLastPage, // Show footer on last page
+              mealsDetails.length > 200, // Show note if limited
+              isLastPage
+                  ? mealsDetails.length
+                  : null, // Total count on last page if limited
+            ),
+          ),
+        );
+      }
+    }
+
+    return pdf;
+  }
+
+  Future<Uint8List> _buildPdfBytes(PdfPageFormat format) async {
+    final pdf = await _buildPdfDocument();
+    return pdf.save();
+  }
+
   Future<void> _generatePDF() async {
     try {
-      final pdf = pw.Document();
-
-      // Build main content (summary sections)
-      final mainContent = [
-        _buildPDFHeader(),
-        pw.SizedBox(height: 20),
-        _buildPDFSummary(),
-        pw.SizedBox(height: 20),
-        _buildPDFMacronutrients(),
-        pw.SizedBox(height: 20),
-        _buildPDFMealDistribution(),
-        pw.SizedBox(height: 20),
-        _buildPDFWeightTracking(),
-        pw.SizedBox(height: 20),
-        _buildPDFDailyCalories(),
-        pw.SizedBox(height: 20),
-        _buildPDFTopMeals(),
-        pw.SizedBox(height: 20),
-      ];
-
-      // Add main content page
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(32),
-          maxPages: 100, // Set high limit for main content
-          build: (context) => [...mainContent, _buildPDFFooter()],
-        ),
-      );
-
-      // Handle meal details table separately to avoid page limit issues
-      final mealsDetails =
-          _reportData['mealsDetails'] as List<Map<String, dynamic>>;
-      if (mealsDetails.isNotEmpty) {
-        // Limit to 200 meals to prevent excessive pages (reduced from 500)
-        final limitedMeals = mealsDetails.length > 200
-            ? mealsDetails.sublist(0, 200)
-            : mealsDetails;
-
-        // Split meals into chunks of 20 per page to ensure they fit
-        const mealsPerPage = 20;
-        for (int i = 0; i < limitedMeals.length; i += mealsPerPage) {
-          final chunk = limitedMeals.sublist(
-            i,
-            i + mealsPerPage > limitedMeals.length
-                ? limitedMeals.length
-                : i + mealsPerPage,
-          );
-          final isLastPage = i + chunk.length >= limitedMeals.length;
-
-          pdf.addPage(
-            pw.Page(
-              pageFormat: PdfPageFormat.a4,
-              margin: const pw.EdgeInsets.all(32),
-              build: (context) => _buildPDFMealDetailsTableForChunk(
-                chunk,
-                i == 0, // Show header only on first page
-                isLastPage, // Show footer on last page
-                mealsDetails.length > 200, // Show note if limited
-                isLastPage
-                    ? mealsDetails.length
-                    : null, // Total count on last page if limited
-              ),
-            ),
-          );
-        }
-      }
-
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => pdf.save(),
-        name:
-            'NutriWise_Report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('PDF generated successfully!'),
-          backgroundColor: Colors.green,
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PdfPreviewPage(
+            fileName: _reportFileName,
+            onLayout: _buildPdfBytes,
+          ),
         ),
       );
     } catch (e) {
@@ -3162,6 +3168,97 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           ],
         ),
       ],
+    );
+  }
+}
+
+class PdfPreviewPage extends StatefulWidget {
+  final String fileName;
+  final LayoutCallback onLayout;
+
+  const PdfPreviewPage({
+    Key? key,
+    required this.fileName,
+    required this.onLayout,
+  }) : super(key: key);
+
+  @override
+  State<PdfPreviewPage> createState() => _PdfPreviewPageState();
+}
+
+class _PdfPreviewPageState extends State<PdfPreviewPage> {
+  Future<void> _sharePdf() async {
+    try {
+      final bytes = await widget.onLayout(PdfPageFormat.a4);
+      await Printing.sharePdf(bytes: bytes, filename: widget.fileName);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to share PDF: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _downloadPdf() async {
+    try {
+      final bytes = await widget.onLayout(PdfPageFormat.a4);
+      await Printing.sharePdf(bytes: bytes, filename: widget.fileName);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Choose Files, Drive, or another save option from the share sheet to keep the PDF.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to save PDF: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.green,
+        title: const Text(
+          'PDF Preview',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: _sharePdf,
+            icon: const Icon(Icons.share),
+            tooltip: 'Share PDF',
+          ),
+          IconButton(
+            onPressed: _downloadPdf,
+            icon: const Icon(Icons.download),
+            tooltip: 'Save PDF',
+          ),
+        ],
+      ),
+      body: PdfPreview(
+        build: widget.onLayout,
+        pdfFileName: widget.fileName,
+        allowPrinting: false,
+        allowSharing: false,
+        canChangeOrientation: false,
+        canChangePageFormat: false,
+        canDebug: false,
+        useActions: false,
+      ),
     );
   }
 }

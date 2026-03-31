@@ -84,7 +84,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
           didAuthenticate = await auth.authenticate(
             localizedReason:
                 'Please use fingerprint or Face ID to complete your account setup.',
-            options: const AuthenticationOptions(biometricOnly: true),
+            biometricOnly: true,
           );
         } catch (e) {
           print('[DEBUG] Biometric authentication error: $e');
