@@ -8,6 +8,7 @@ import 'meal_summary.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'food_recognition.dart';
+import 'search_food_page.dart';
 
 class LogFoodModal extends StatefulWidget {
   const LogFoodModal({Key? key}) : super(key: key);
@@ -114,6 +115,7 @@ class _LogFoodModalState extends State<LogFoodModal> {
       onGallery: _handleGalleryTap,
       onCamera: _handleCameraTap,
       onBarcode: _handleBarcodeTap,
+      onSearchFood: _handleSearchFoodTap,
     );
   }
 
@@ -265,6 +267,19 @@ class _LogFoodModalState extends State<LogFoodModal> {
     } catch (e) {
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
       _showErrorSnackBar('Barcode scan failed: ${e.toString()}');
+    }
+  }
+
+  Future<void> _handleSearchFoodTap() async {
+    if (!mounted || selectedMeal == null) return;
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SearchFoodPage(mealType: selectedMeal!),
+      ),
+    );
+
+    if (mounted && result == true) {
+      Navigator.of(context).pop(true);
     }
   }
 
@@ -651,6 +666,7 @@ class _InputOptionsSheet extends StatelessWidget {
   final VoidCallback onGallery;
   final VoidCallback onCamera;
   final VoidCallback onBarcode;
+  final VoidCallback onSearchFood;
 
   const _InputOptionsSheet({
     required this.mealName,
@@ -658,6 +674,7 @@ class _InputOptionsSheet extends StatelessWidget {
     required this.onGallery,
     required this.onCamera,
     required this.onBarcode,
+    required this.onSearchFood,
   });
 
   @override
@@ -693,6 +710,35 @@ class _InputOptionsSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
+          ListTile(
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.purple[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.search,
+                color: Colors.purple[600],
+                size: 24,
+              ),
+            ),
+            title: const Text(
+              'Search Food',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            subtitle: const Text(
+              'Find a food and log it manually',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey,
+              ),
+            ),
+            onTap: onSearchFood,
+          ),
           ListTile(
             leading: Container(
               padding: const EdgeInsets.all(8),

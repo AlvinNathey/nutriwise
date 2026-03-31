@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:nutriwise/services/food_collections.dart';
 
 class EditFoodLogPage extends StatefulWidget {
   final String foodLogId;
@@ -30,6 +31,7 @@ class _EditFoodLogPageState extends State<EditFoodLogPage> {
   double _baseProtein = 0;
   double _baseFat = 0;
   double _baseQuantity = 100;
+  String _targetCollection = manualFoodsCollection;
 
   final _foodNameController = TextEditingController();
   final _caloriesController = TextEditingController();
@@ -56,12 +58,16 @@ class _EditFoodLogPageState extends State<EditFoodLogPage> {
   Future<void> _fetchFoodLog() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('barcodes')
-        .doc(widget.foodLogId)
-        .get();
+    var doc = await userManualFoodsCollection(user.uid).doc(widget.foodLogId).get();
+    if (!doc.exists) {
+      _targetCollection = 'barcodes';
+      doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('barcodes')
+          .doc(widget.foodLogId)
+          .get();
+    }
     final data = doc.data();
     if (data != null) {
       setState(() {
@@ -126,7 +132,7 @@ class _EditFoodLogPageState extends State<EditFoodLogPage> {
     await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
-        .collection('barcodes')
+        .collection(_targetCollection)
         .doc(widget.foodLogId)
         .update({
       'foodName': _foodNameController.text.trim(),

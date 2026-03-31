@@ -6,7 +6,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:nutriwise/food/after_meal_summary.dart';
 import 'package:nutriwise/home/home_screen.dart';
+import 'package:nutriwise/services/food_collections.dart';
 import 'package:barcode_scan2/barcode_scan2.dart';
 
 // Model class for food items
@@ -135,11 +137,20 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   final ImagePicker _imagePicker = ImagePicker();
   final TextRecognizer _textRecognizer = TextRecognizer();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  int _dailyGoal = 2000;
+  int _carbsTarget = 250;
+  int _proteinTarget = 150;
+  int _fatTarget = 70;
+  int _todayCaloriesConsumed = 0;
+  int _todayCarbsConsumed = 0;
+  int _todayProteinConsumed = 0;
+  int _todayFatConsumed = 0;
 
   @override
   void initState() {
     super.initState();
     _initializeFirstFood();
+    _fetchUserGoalsAndTodayIntake();
   }
 
   void _initializeFirstFood() {
@@ -1398,6 +1409,96 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
     }
   }
 
+  Future<void> _fetchUserGoalsAndTodayIntake() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final now = DateTime.now();
+      final dateStr =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      final userData = userDoc.data() ?? {};
+
+      int calories = 0;
+      int carbs = 0;
+      int protein = 0;
+      int fat = 0;
+
+      final mealsSnapshot = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('meals')
+          .where('date', isEqualTo: dateStr)
+          .get();
+      for (final doc in mealsSnapshot.docs) {
+        final data = doc.data();
+        calories += ((data['totalCalories'] ?? 0) as num).round();
+        carbs += ((data['totalCarbs'] ?? 0) as num).round();
+        protein += ((data['totalProtein'] ?? 0) as num).round();
+        fat += ((data['totalFat'] ?? 0) as num).round();
+      }
+
+      final barcodesSnapshot = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('barcodes')
+          .where('date', isEqualTo: dateStr)
+          .get();
+      for (final doc in barcodesSnapshot.docs) {
+        final data = doc.data();
+        calories += ((data['calories'] ?? 0) as num).round();
+        carbs += ((data['carbs'] ?? 0) as num).round();
+        protein += ((data['protein'] ?? 0) as num).round();
+        fat += ((data['fat'] ?? 0) as num).round();
+      }
+
+      final manualSnapshot = await userManualFoodsCollection(user.uid)
+          .where('date', isEqualTo: dateStr)
+          .get();
+      for (final doc in manualSnapshot.docs) {
+        final data = doc.data();
+        calories += ((data['calories'] ?? 0) as num).round();
+        carbs += ((data['carbs'] ?? 0) as num).round();
+        protein += ((data['protein'] ?? 0) as num).round();
+        fat += ((data['fat'] ?? 0) as num).round();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _dailyGoal = ((userData['calories'] ?? 2000) as num).round();
+        _carbsTarget = ((userData['carbG'] ?? 250) as num).round();
+        _proteinTarget = ((userData['proteinG'] ?? 150) as num).round();
+        _fatTarget = ((userData['fatG'] ?? 70) as num).round();
+        _todayCaloriesConsumed = calories;
+        _todayCarbsConsumed = carbs;
+        _todayProteinConsumed = protein;
+        _todayFatConsumed = fat;
+      });
+    } catch (_) {}
+  }
+
+  int _calculateMealCalories() => _foodItems.fold(
+        0,
+        (sum, food) => sum + (food.hasNutritionData ? food.getCalories().round() : 0),
+      );
+
+  int _calculateMealCarbs() => _foodItems.fold(
+        0,
+        (sum, food) => sum + (food.hasNutritionData ? food.getCarbs().round() : 0),
+      );
+
+  int _calculateMealProtein() => _foodItems.fold(
+        0,
+        (sum, food) => sum + (food.hasNutritionData ? food.getProtein().round() : 0),
+      );
+
+  int _calculateMealFat() => _foodItems.fold(
+        0,
+        (sum, food) => sum + (food.hasNutritionData ? food.getFat().round() : 0),
+      );
+
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
@@ -1572,6 +1673,21 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                               const SizedBox(height: 24),
                               _buildNutritionInfo(),
                               const SizedBox(height: 24),
+                              AfterMealSummary(
+                                dailyGoal: _dailyGoal,
+                                carbsTarget: _carbsTarget,
+                                proteinTarget: _proteinTarget,
+                                fatTarget: _fatTarget,
+                                todayCaloriesConsumed: _todayCaloriesConsumed,
+                                todayCarbsConsumed: _todayCarbsConsumed,
+                                todayProteinConsumed: _todayProteinConsumed,
+                                todayFatConsumed: _todayFatConsumed,
+                                mealCalories: _calculateMealCalories(),
+                                mealCarbs: _calculateMealCarbs(),
+                                mealProtein: _calculateMealProtein(),
+                                mealFat: _calculateMealFat(),
+                                margin: const EdgeInsets.only(bottom: 24),
+                              ),
                             ],
                             if (_currentFood.hasNutritionData) ...[
                               // Scan Another Food Button
@@ -1639,6 +1755,21 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                             const SizedBox(height: 24),
                             _buildNutritionInfo(),
                             const SizedBox(height: 24),
+                            AfterMealSummary(
+                              dailyGoal: _dailyGoal,
+                              carbsTarget: _carbsTarget,
+                              proteinTarget: _proteinTarget,
+                              fatTarget: _fatTarget,
+                              todayCaloriesConsumed: _todayCaloriesConsumed,
+                              todayCarbsConsumed: _todayCarbsConsumed,
+                              todayProteinConsumed: _todayProteinConsumed,
+                              todayFatConsumed: _todayFatConsumed,
+                              mealCalories: _calculateMealCalories(),
+                              mealCarbs: _calculateMealCarbs(),
+                              mealProtein: _calculateMealProtein(),
+                              mealFat: _calculateMealFat(),
+                              margin: const EdgeInsets.only(bottom: 24),
+                            ),
 
                             // Scan Another Food Button
                             SizedBox(

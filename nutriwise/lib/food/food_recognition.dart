@@ -13,6 +13,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:nutriwise/services/food_collections.dart';
 
 // ============================================================================
 // Configuration Constants (replaces hardcoded values)
@@ -2162,7 +2163,19 @@ _fatAnimation     = _fatAnimationController;
           .where('date', isEqualTo: dateStr)
           .get();
 
+      final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+          .where('date', isEqualTo: dateStr)
+          .get();
+
       for (var doc in barcodesSnapshot.docs) {
+        final mealData = doc.data();
+        totalCals += _parseFirestoreNumber(mealData['calories']);
+        totalCarbs += _parseFirestoreNumber(mealData['carbs']);
+        totalProtein += _parseFirestoreNumber(mealData['protein']);
+        totalFat += _parseFirestoreNumber(mealData['fat']);
+      }
+
+      for (var doc in manualFoodsSnapshot.docs) {
         final mealData = doc.data();
         totalCals += _parseFirestoreNumber(mealData['calories']);
         totalCarbs += _parseFirestoreNumber(mealData['carbs']);

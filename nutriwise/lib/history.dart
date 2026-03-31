@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:nutriwise/food/edit_food_log.dart';
+import 'package:nutriwise/services/food_collections.dart';
 
 // ─────────────────────────────────────────────────────────────────
 // Models
@@ -14,6 +15,7 @@ class FoodLog {
   final String foodName;
   final int calories;
   final DateTime createdAt;
+  final String source;
   final String? imageUrl;
   final bool isMeal;
   final List<Map<String, dynamic>>? foodItems;
@@ -25,6 +27,7 @@ class FoodLog {
     required this.foodName,
     required this.calories,
     required this.createdAt,
+    this.source = 'Barcode',
     this.imageUrl,
     this.isMeal = false,
     this.foodItems,
@@ -67,20 +70,43 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
       .collection('barcodes')
       .orderBy('createdAt', descending: true)
       .get();
+  final manualSnapshot = await userManualFoodsCollection(user.uid)
+      .orderBy('createdAt', descending: true)
+      .get();
 
-  return snapshot.docs.map((doc) {
-    final data = doc.data();
-    final date = _parseCreatedAt(data['createdAt']);
-    return FoodLog(
-      id: doc.id,
-      mealType: (data['mealType'] ?? 'Meal').toString(),
-      time: _formatTimeFromDate(date),
-      foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
-      calories: (data['calories'] ?? 0).round(),
-      createdAt: date,
-      isMeal: false,
-    );
-  }).toList();
+  final logs = [
+    ...snapshot.docs.map((doc) {
+      final data = doc.data();
+      final date = _parseCreatedAt(data['createdAt']);
+      return FoodLog(
+        id: doc.id,
+        mealType: (data['mealType'] ?? 'Meal').toString(),
+        time: _formatTimeFromDate(date),
+        foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
+        calories: (data['calories'] ?? 0).round(),
+        createdAt: date,
+        source: (data['source'] ?? 'Barcode').toString(),
+        isMeal: false,
+      );
+    }),
+    ...manualSnapshot.docs.map((doc) {
+      final data = doc.data();
+      final date = _parseCreatedAt(data['createdAt']);
+      return FoodLog(
+        id: doc.id,
+        mealType: (data['mealType'] ?? 'Meal').toString(),
+        time: _formatTimeFromDate(date),
+        foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
+        calories: (data['calories'] ?? 0).round(),
+        createdAt: date,
+        source: (data['source'] ?? 'Manually Added').toString(),
+        isMeal: false,
+      );
+    }),
+  ];
+
+  logs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  return logs;
 }
 
 Future<List<FoodLog>> fetchMealLogs() async {
@@ -879,6 +905,18 @@ class _HistoryPageState extends State<HistoryPage> {
   // ── Barcode scanned food card ──────────────────────────────────
 
   Widget _buildFoodLogCard(BuildContext context, FoodLog log) {
+    final isManual = log.source == 'Manually Added';
+    final isAi = log.source == 'AI Detection';
+    final icon = isAi
+        ? Icons.camera_alt
+        : (isManual ? Icons.edit_note : Icons.qr_code_2);
+    final accentColor = isAi
+        ? Colors.green
+        : (isManual ? Colors.purple : Colors.green);
+    final sourceLabel = isManual
+        ? 'Manually Added'
+        : (isAi ? 'AI Detected' : 'Barcode Scanned');
+
     return GestureDetector(
       onTap: () async {
         await Navigator.of(context).push(
@@ -907,13 +945,13 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               Column(
                 children: [
-                  const Icon(Icons.qr_code_2, size: 36, color: Colors.green),
+                  Icon(icon, size: 36, color: accentColor),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Scanned',
+                  Text(
+                    isManual ? 'Manual' : (isAi ? 'AI' : 'Scanned'),
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.green,
+                      color: accentColor,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -961,6 +999,15 @@ class _HistoryPageState extends State<HistoryPage> {
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.green[700],
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      sourceLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],

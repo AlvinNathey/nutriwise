@@ -10,6 +10,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
+import 'package:nutriwise/services/food_collections.dart';
 
 // Color mapping for meal types
 const Map<String, Color> mealTypeColors = {
@@ -119,7 +120,39 @@ class _RecordsPageState extends State<RecordsPage>
         .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
         .get();
 
+    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
+        .get();
+
     for (var doc in barcodeSnapshot.docs) {
+      final data = doc.data();
+      final createdAt = data['createdAt'];
+      final calories = (data['calories'] ?? 0).round();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
+
+      if (createdAt is Timestamp) {
+        final date = createdAt.toDate();
+        final day = date.day;
+        calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
+        if (mealTypeCounts.containsKey(mealType)) {
+          mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+        }
+        dayMealTypes.putIfAbsent(day, () => <String>{});
+        dayMealTypes[day]!.add(mealType);
+      }
+    }
+
+    for (var doc in manualFoodsSnapshot.docs) {
       final data = doc.data();
       final createdAt = data['createdAt'];
       final calories = (data['calories'] ?? 0).round();
@@ -1005,6 +1038,17 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
           )
           .get();
 
+      final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(widget.startDate),
+          )
+          .where(
+            'createdAt',
+            isLessThanOrEqualTo: Timestamp.fromDate(widget.endDate),
+          )
+          .get();
+
       // --- Fetch meals from meals ---
       final mealsSnapshot = await FirebaseFirestore.instance
           .collection('users')
@@ -1051,6 +1095,21 @@ class _ReportPreviewPageState extends State<ReportPreviewPage> {
               ? (data['createdAt'] as Timestamp).toDate()
               : DateTime.now(),
           'imageUrl': null, // No image for barcode logs
+        });
+      }
+      for (var doc in manualFoodsSnapshot.docs) {
+        final data = doc.data();
+        allMeals.add({
+          'name': data['foodName'] ?? 'Unknown',
+          'mealType': (data['mealType'] ?? 'Meal').toString().trim(),
+          'calories': (data['calories'] ?? 0).toDouble(),
+          'protein': (data['protein'] ?? 0).toDouble(),
+          'carbs': (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble(),
+          'fat': (data['fat'] ?? 0).toDouble(),
+          'date': data['createdAt'] is Timestamp
+              ? (data['createdAt'] as Timestamp).toDate()
+              : DateTime.now(),
+          'imageUrl': null,
         });
       }
       for (var doc in mealsSnapshot.docs) {
@@ -3350,6 +3409,14 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
+    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
     // --- Fetch from meals ---
     final mealsSnapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -3370,6 +3437,16 @@ class _NutrientsPageState extends State<NutrientsPage> {
       if (createdAt is Timestamp) {
         final date = createdAt.toDate();
         final weekday = date.weekday; // 1=Mon, 7=Sun
+        weekIntake[weekday] = ((weekIntake[weekday] ?? 0) + calories).toInt();
+      }
+    }
+    for (var doc in manualFoodsSnapshot.docs) {
+      final data = doc.data();
+      final createdAt = data['createdAt'];
+      final calories = (data['calories'] ?? 0).round();
+      if (createdAt is Timestamp) {
+        final date = createdAt.toDate();
+        final weekday = date.weekday;
         weekIntake[weekday] = ((weekIntake[weekday] ?? 0) + calories).toInt();
       }
     }
@@ -3422,6 +3499,14 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
+    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
     // --- Fetch from meals ---
     final mealsSnapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -3448,6 +3533,19 @@ class _NutrientsPageState extends State<NutrientsPage> {
     };
 
     for (var doc in barcodeSnapshot.docs) {
+      final data = doc.data();
+      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+      if (mealType == 'Breakfast Snack' ||
+          mealType == 'Afternoon Snack' ||
+          mealType == 'Midnight Snack') {
+        mealType = 'Snack';
+      }
+      if (mealCounts.containsKey(mealType)) {
+        mealCounts[mealType] = mealCounts[mealType]! + 1;
+        mealMacros[mealType]!.add(data);
+      }
+    }
+    for (var doc in manualFoodsSnapshot.docs) {
       final data = doc.data();
       String mealType = (data['mealType'] ?? 'Meal').toString().trim();
       if (mealType == 'Breakfast Snack' ||
@@ -3508,6 +3606,14 @@ class _NutrientsPageState extends State<NutrientsPage> {
         .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
         .get();
 
+    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+        )
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+        .get();
+
     // --- Fetch from meals ---
     final mealsSnapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -3524,6 +3630,12 @@ class _NutrientsPageState extends State<NutrientsPage> {
     double totalProtein = 0;
     double totalFat = 0;
     for (var doc in barcodeSnapshot.docs) {
+      final data = doc.data();
+      totalCarbs += (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble();
+      totalProtein += (data['protein'] ?? 0).toDouble();
+      totalFat += (data['fat'] ?? 0).toDouble();
+    }
+    for (var doc in manualFoodsSnapshot.docs) {
       final data = doc.data();
       totalCarbs += (data['carbohydrate'] ?? data['carbs'] ?? 0).toDouble();
       totalProtein += (data['protein'] ?? 0).toDouble();

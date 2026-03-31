@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:nutriwise/services/auth_services.dart';
+import 'package:nutriwise/services/food_collections.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -514,6 +515,11 @@ class _HomeScreenState extends State<HomeScreen> {
         .orderBy('createdAt', descending: true)
         .get();
 
+    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+        .where('date', isEqualTo: dateStr)
+        .orderBy('createdAt', descending: true)
+        .get();
+
     List<Map<String, dynamic>> allMeals = [];
 
     // Process NEW meals structure - KEEP AS ONE MEAL (don't split)
@@ -586,6 +592,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Process OLD barcodes structure (backward compatibility)
     for (var doc in barcodesSnapshot.docs) {
       final data = doc.data();
+      final source = (data['source'] ?? 'Barcode').toString();
       allMeals.add({
         'foodName': data['foodName'] ?? 'Unknown',
         'foodCount': 1,
@@ -601,11 +608,76 @@ class _HomeScreenState extends State<HomeScreen> {
         'mealType': data['mealType'] ?? 'Meal',
         'time': data['time'] ?? '',
         'date': data['date'] ?? '',
-        'source': 'Barcode',
+        'source': source,
         'createdAt': data['timestamp'] ?? data['createdAt'],
         'isGrouped': false,
       });
     }
+
+    final groupedManualMeals = <String, Map<String, dynamic>>{};
+    final standaloneManualMeals = <Map<String, dynamic>>[];
+
+    for (var doc in manualFoodsSnapshot.docs) {
+      final data = doc.data();
+      final mealGroupId = (data['mealGroupId'] ?? '').toString().trim();
+
+      if (mealGroupId.isNotEmpty) {
+        final existing = groupedManualMeals[mealGroupId];
+        if (existing == null) {
+          groupedManualMeals[mealGroupId] = {
+            'foodName': data['combinedFoodName'] ?? data['foodName'] ?? 'Unknown',
+            'foodCount': (data['foodCount'] ?? 1),
+            'calories': data['calories'] ?? 0,
+            'carbs': data['carbs'] ?? 0,
+            'protein': data['protein'] ?? 0,
+            'fat': data['fat'] ?? 0,
+            'quantity': data['quantity'],
+            'unit': data['unit'],
+            'mealType': data['mealType'] ?? 'Meal',
+            'time': data['time'] ?? '',
+            'date': data['date'] ?? '',
+            'source': data['source'] ?? 'Manually Added',
+            'imageUrl': null,
+            'mealId': mealGroupId,
+            'createdAt': data['createdAt'],
+            'isGrouped': true,
+          };
+        } else {
+          existing['calories'] = _safeNum(existing['calories']) + _safeNum(data['calories']);
+          existing['carbs'] = _safeNum(existing['carbs']) + _safeNum(data['carbs']);
+          existing['protein'] = _safeNum(existing['protein']) + _safeNum(data['protein']);
+          existing['fat'] = _safeNum(existing['fat']) + _safeNum(data['fat']);
+          existing['foodCount'] = _safeNum(data['foodCount']) > 0
+              ? _safeNum(data['foodCount'])
+              : _safeNum(existing['foodCount']) + 1;
+          final existingQuantity = (existing['quantity'] as num?)?.toDouble() ?? 0;
+          final newQuantity = (data['quantity'] as num?)?.toDouble() ?? 0;
+          existing['quantity'] = existingQuantity + newQuantity;
+        }
+      } else {
+        standaloneManualMeals.add({
+          'foodName': data['foodName'] ?? 'Unknown',
+          'foodCount': 1,
+          'calories': data['calories'] ?? 0,
+          'carbs': data['carbs'] ?? 0,
+          'protein': data['protein'] ?? 0,
+          'fat': data['fat'] ?? 0,
+          'quantity': data['quantity'],
+          'unit': data['unit'],
+          'mealType': data['mealType'] ?? 'Meal',
+          'time': data['time'] ?? '',
+          'date': data['date'] ?? '',
+          'source': data['source'] ?? 'Manually Added',
+          'imageUrl': null,
+          'mealId': doc.id,
+          'createdAt': data['createdAt'],
+          'isGrouped': false,
+        });
+      }
+    }
+
+    allMeals.addAll(groupedManualMeals.values);
+    allMeals.addAll(standaloneManualMeals);
 
     // Sort by creation time (most recent first)
     allMeals.sort((a, b) {
@@ -1152,8 +1224,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ]
                                   : meals.map((meal) {
+                                      final source =
+                                          (meal['source'] ?? 'Barcode')
+                                              .toString();
                                       final isAIDetected =
-                                          meal['source'] == 'AI Detection';
+                                          source == 'AI Detection';
+                                      final isManualAdded =
+                                          source == 'Manually Added';
                                       final foodCount = _safeNum(
                                         meal['foodCount'],
                                       );
@@ -1161,6 +1238,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                           meal['isGrouped'] == true;
                                       final quantityText =
                                           _formatMealQuantity(meal);
+                                      final sourceColor = isAIDetected
+                                          ? Colors.green
+                                          : (isManualAdded
+                                                ? Colors.purple
+                                                : Colors.orange);
+                                      final sourceIcon = isAIDetected
+                                          ? Icons.camera_alt
+                                          : (isManualAdded
+                                                ? Icons.edit_note
+                                                : Icons.qr_code_2);
+                                      final sourceLabel = isAIDetected
+                                          ? 'AI detected'
+                                          : (isManualAdded
+                                                ? 'Manually added'
+                                                : 'Barcode scanned');
 
                                       return Container(
                                         width: double.infinity,
@@ -1307,24 +1399,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                             // Meal type and source indicator
                                             Row(
                                               children: [
-                                                Icon(
-                                                  isAIDetected
-                                                      ? Icons.camera_alt
-                                                      : Icons.qr_code_2,
-                                                  size: 14,
-                                                  color: isAIDetected
-                                                      ? Colors.green
-                                                      : Colors.orange,
-                                                ),
+                                                Icon(sourceIcon,
+                                                    size: 14,
+                                                    color: sourceColor),
                                                 const SizedBox(width: 4),
                                                 Expanded(
                                                   child: Text(
-                                                    '${meal['mealType']?.toString() ?? 'Meal'} • ${isAIDetected ? 'AI detected' : 'Barcode scanned'}',
+                                                    '${meal['mealType']?.toString() ?? 'Meal'} • $sourceLabel',
                                                     style: TextStyle(
                                                       fontSize: 12,
-                                                      color: isAIDetected
-                                                          ? Colors.green
-                                                          : Colors.orange,
+                                                      color: sourceColor,
                                                       fontWeight:
                                                           FontWeight.w500,
                                                     ),
