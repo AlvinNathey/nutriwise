@@ -65,6 +65,30 @@ class FoodItem {
   double getFat() => baseFat * getMultiplier();
 }
 
+class BarcodeSelectionItem {
+  final String barcode;
+  final String foodName;
+  final double baseCalories;
+  final double baseCarbs;
+  final double baseProtein;
+  final double baseFat;
+  final String unit;
+  final double baselineQuantity;
+  final double selectedQuantity;
+
+  const BarcodeSelectionItem({
+    required this.barcode,
+    required this.foodName,
+    required this.baseCalories,
+    required this.baseCarbs,
+    required this.baseProtein,
+    required this.baseFat,
+    required this.unit,
+    required this.baselineQuantity,
+    required this.selectedQuantity,
+  });
+}
+
 enum NutritionBasisKind { per100, perServing, perPackage, unknown }
 
 class NutritionExtractionResult {
@@ -93,12 +117,14 @@ class MealSummaryPage extends StatefulWidget {
   final String mealType;
   final String? foodName;
   final String barcode;
+  final bool returnSelectionOnly;
 
   const MealSummaryPage({
     Key? key,
     required this.mealType,
     required this.foodName,
     required this.barcode,
+    this.returnSelectionOnly = false,
   }) : super(key: key);
 
   @override
@@ -206,7 +232,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           food.baselineQuantity = baselineRaw is num
               ? baselineRaw.toDouble()
               : double.tryParse(baselineRaw?.toString() ?? '') ?? 100.0;
-          food.foodName = data?['foodName'];
+          food.foodName = (data?['foodName'] ??
+                  data?['name'] ??
+                  data?['productName'] ??
+                  data?['product_name'])
+              ?.toString();
           food.hasNutritionData = true;
           _isLoading = false;
         });
@@ -229,7 +259,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           food.baselineQuantity = baselineRaw is num
               ? baselineRaw.toDouble()
               : double.tryParse(baselineRaw?.toString() ?? '') ?? 100.0;
-          food.foodName = data?['foodName'];
+          food.foodName = (data?['foodName'] ??
+                  data?['name'] ??
+                  data?['productName'] ??
+                  data?['product_name'])
+              ?.toString();
           food.hasNutritionData = true;
           _isLoading = false;
         });
@@ -246,6 +280,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
           food.baseFat = nutritionData['fat'] ?? 0;
           food.servingUnit = nutritionData['unit'] ?? 'g';
           food.baselineQuantity = nutritionData['baselineQuantity'] ?? 100.0;
+          final fetchedName = (nutritionData['foodName'] ?? '').toString().trim();
+          if (fetchedName.isNotEmpty &&
+              (food.foodName == null || food.foodName!.trim().isEmpty)) {
+            food.foodName = fetchedName;
+          }
           food.hasNutritionData = true;
           _isLoading = false;
         });
@@ -331,6 +370,11 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
             protein ??= _parseDouble(nutriments['proteins_100g']);
             fat ??= _parseDouble(nutriments['fat_100g']);
 
+            final productName =
+                product['product_name'] ??
+                product['product_name_en'] ??
+                product['generic_name'];
+
             return {
               'calories': calories ?? 0,
               'carbs': carbs ?? 0,
@@ -338,6 +382,7 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
               'fat': fat ?? 0,
               'unit': unit,
               'baselineQuantity': baselineQuantity,
+              'foodName': productName?.toString(),
             };
           }
         }
@@ -1221,6 +1266,38 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
   }
 
   void _saveAllFoodDetails() async {
+    if (widget.returnSelectionOnly) {
+      final selectedFoods = _foodItems
+          .where(
+            (food) =>
+                food.hasNutritionData &&
+                (food.foodName?.trim().isNotEmpty ?? false),
+          )
+          .map(
+            (food) => BarcodeSelectionItem(
+              barcode: food.barcode,
+              foodName: food.foodName!.trim(),
+              baseCalories: food.baseCalories,
+              baseCarbs: food.baseCarbs,
+              baseProtein: food.baseProtein,
+              baseFat: food.baseFat,
+              unit: food.servingUnit,
+              baselineQuantity: food.baselineQuantity,
+              selectedQuantity: food.getTotalQuantity(),
+            ),
+          )
+          .toList();
+
+      if (selectedFoods.isEmpty) {
+        _showErrorDialog('Add nutrition details before continuing.');
+        return;
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pop(selectedFoods);
+      return;
+    }
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(
@@ -1731,9 +1808,13 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                                     ),
                                   ),
                                   child: Text(
-                                    _foodItems.length > 1
-                                        ? 'Save All ${_foodItems.length} Items'
-                                        : 'Save & Continue',
+                                    widget.returnSelectionOnly
+                                        ? (_foodItems.length > 1
+                                            ? 'Add All ${_foodItems.length} Items'
+                                            : 'Add To Meal')
+                                        : (_foodItems.length > 1
+                                            ? 'Save All ${_foodItems.length} Items'
+                                            : 'Save & Continue'),
                                     style: const TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.w600,
@@ -1812,9 +1893,13 @@ class _MealSummaryPageState extends State<MealSummaryPage> {
                                   ),
                                 ),
                                 child: Text(
-                                  _foodItems.length > 1
-                                      ? 'Save All ${_foodItems.length} Items'
-                                      : 'Save & Continue',
+                                  widget.returnSelectionOnly
+                                      ? (_foodItems.length > 1
+                                          ? 'Add All ${_foodItems.length} Items'
+                                          : 'Add To Meal')
+                                      : (_foodItems.length > 1
+                                          ? 'Save All ${_foodItems.length} Items'
+                                          : 'Save & Continue'),
                                   style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.w600,

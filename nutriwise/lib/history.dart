@@ -19,6 +19,8 @@ class FoodLog {
   final String? imageUrl;
   final bool isMeal;
   final List<Map<String, dynamic>>? foodItems;
+  final bool canEdit;
+  final bool fromManualFlow;
 
   FoodLog({
     required this.id,
@@ -31,6 +33,8 @@ class FoodLog {
     this.imageUrl,
     this.isMeal = false,
     this.foodItems,
+    this.canEdit = true,
+    this.fromManualFlow = false,
   });
 }
 
@@ -89,24 +93,93 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
         isMeal: false,
       );
     }),
-    ...manualSnapshot.docs.map((doc) {
-      final data = doc.data();
-      final date = _parseCreatedAt(data['createdAt']);
-      return FoodLog(
-        id: doc.id,
-        mealType: (data['mealType'] ?? 'Meal').toString(),
-        time: _formatTimeFromDate(date),
-        foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
-        calories: (data['calories'] ?? 0).round(),
-        createdAt: date,
-        source: (data['source'] ?? 'Manually Added').toString(),
-        isMeal: false,
-      );
-    }),
+    ..._buildGroupedManualLogs(manualSnapshot.docs),
   ];
 
   logs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
   return logs;
+}
+
+List<FoodLog> _buildGroupedManualLogs(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+) {
+  final grouped = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+  final standalone = <FoodLog>[];
+
+  for (final doc in docs) {
+    final data = doc.data();
+    final mealGroupId = (data['mealGroupId'] ?? '').toString().trim();
+    if (mealGroupId.isEmpty) {
+      final date = _parseCreatedAt(data['createdAt']);
+      final itemSource = (data['itemSource'] ?? data['source'] ?? 'Manually Added')
+          .toString();
+      final hasBarcodeItem = _isBarcodeItemSource(itemSource);
+      standalone.add(
+        FoodLog(
+          id: doc.id,
+          mealType: (data['mealType'] ?? 'Meal').toString(),
+          time: _formatTimeFromDate(date),
+          foodName: (data['foodName'] ?? data['name'] ?? 'Unknown').toString(),
+          calories: (data['calories'] ?? 0).round(),
+          createdAt: date,
+          source: _resolveGroupedManualSource(!hasBarcodeItem, hasBarcodeItem),
+          isMeal: false,
+          fromManualFlow: true,
+        ),
+      );
+      continue;
+    }
+    grouped.putIfAbsent(mealGroupId, () => []).add(doc);
+  }
+
+  final groupedLogs = grouped.entries.map((entry) {
+    final groupDocs = entry.value;
+    final first = groupDocs.first.data();
+    final createdAt = _parseCreatedAt(first['createdAt']);
+    final foodNames = groupDocs
+        .map((doc) => (doc.data()['foodName'] ?? '').toString().trim())
+        .where((name) => name.isNotEmpty)
+        .toList();
+    final totalCalories = groupDocs.fold<int>(
+      0,
+      (sum, doc) => sum + ((doc.data()['calories'] ?? 0) as num).round(),
+    );
+    final hasBarcodeItem = groupDocs.any(
+      (doc) => _isBarcodeItemSource(
+        (doc.data()['itemSource'] ?? doc.data()['source'] ?? '').toString(),
+      ),
+    );
+    final resolvedSource = _resolveGroupedManualSource(!hasBarcodeItem, hasBarcodeItem);
+
+    return FoodLog(
+      id: groupDocs.first.id,
+      mealType: (first['mealType'] ?? 'Meal').toString(),
+      time: _formatTimeFromDate(createdAt),
+      foodName: (first['combinedFoodName'] ??
+              (foodNames.isEmpty ? 'Meal' : foodNames.join(', ')))
+          .toString(),
+      calories: totalCalories,
+      createdAt: createdAt,
+      source: resolvedSource,
+      isMeal: false,
+      canEdit: false,
+      fromManualFlow: true,
+      foodItems: foodNames.map((name) => {'foodName': name}).toList(),
+    );
+  });
+
+  return [...standalone, ...groupedLogs];
+}
+
+bool _isBarcodeItemSource(String source) {
+  final normalized = source.trim().toLowerCase();
+  return normalized.contains('barcode');
+}
+
+String _resolveGroupedManualSource(bool hasManual, bool hasBarcode) {
+  if (hasManual && hasBarcode) return 'Mixed Entry';
+  if (hasBarcode) return 'Barcode Scanned';
+  return 'Manually Added';
 }
 
 Future<List<FoodLog>> fetchMealLogs() async {
@@ -907,25 +980,37 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget _buildFoodLogCard(BuildContext context, FoodLog log) {
     final isManual = log.source == 'Manually Added';
     final isAi = log.source == 'AI Detection';
+    final isMixed = log.source == 'Mixed Entry';
+    final isManualFlow = log.fromManualFlow;
     final icon = isAi
         ? Icons.camera_alt
-        : (isManual ? Icons.edit_note : Icons.qr_code_2);
+        : (isMixed
+            ? Icons.add_link
+            : ((isManualFlow || isManual) ? Icons.edit_note : Icons.qr_code_2));
     final accentColor = isAi
         ? Colors.green
-        : (isManual ? Colors.purple : Colors.green);
+        : (isMixed
+            ? Colors.teal
+            : ((isManualFlow || isManual) ? Colors.purple : Colors.green));
     final sourceLabel = isManual
         ? 'Manually Added'
-        : (isAi ? 'AI Detected' : 'Barcode Scanned');
+        : (isAi
+            ? 'AI Detected'
+            : (isMixed
+                ? 'Manual + Barcode'
+                : (isManualFlow ? 'Manual entry + barcode' : 'Barcode Scanned')));
 
     return GestureDetector(
-      onTap: () async {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => EditFoodLogPage(foodLogId: log.id),
-          ),
-        );
-        _refreshLogs();
-      },
+      onTap: log.canEdit
+          ? () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => EditFoodLogPage(foodLogId: log.id),
+                ),
+              );
+              _refreshLogs();
+            }
+          : null,
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -948,7 +1033,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   Icon(icon, size: 36, color: accentColor),
                   const SizedBox(height: 4),
                   Text(
-                    isManual ? 'Manual' : (isAi ? 'AI' : 'Scanned'),
+                    (isManualFlow || isManual) ? 'Manual' : (isAi ? 'AI' : 'Scanned'),
                     style: TextStyle(
                       fontSize: 12,
                       color: accentColor,

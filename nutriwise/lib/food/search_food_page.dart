@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:barcode_scan2/barcode_scan2.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nutriwise/food/after_meal_summary.dart';
 import 'package:nutriwise/food/food_search_service.dart';
+import 'package:nutriwise/food/meal_summary.dart';
 import 'package:nutriwise/home/home_screen.dart';
 import 'package:nutriwise/services/food_collections.dart';
 import 'package:shimmer/shimmer.dart';
@@ -20,6 +22,7 @@ class SelectedSearchFoodItem {
   final double quantity;
   final String quantityUnit;
   final String? servingLabel;
+  final String logSource;
   final DateTime selectedAt;
 
   SelectedSearchFoodItem({
@@ -27,6 +30,7 @@ class SelectedSearchFoodItem {
     required this.quantity,
     required this.quantityUnit,
     this.servingLabel,
+    this.logSource = 'Manually Added',
     DateTime? selectedAt,
   }) : selectedAt = selectedAt ?? DateTime.now();
 
@@ -41,12 +45,14 @@ class SelectedSearchFoodItem {
     double? quantity,
     String? quantityUnit,
     String? servingLabel,
+    String? logSource,
   }) {
     return SelectedSearchFoodItem(
       result: result,
       quantity: quantity ?? this.quantity,
       quantityUnit: quantityUnit ?? this.quantityUnit,
       servingLabel: servingLabel ?? this.servingLabel,
+      logSource: logSource ?? this.logSource,
       selectedAt: selectedAt,
     );
   }
@@ -81,6 +87,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   // State
   final List<SelectedSearchFoodItem> _selectedFoods = [];
   Timer? _debounce;
+  Timer? _searchRetryTimer;
   
   bool _isLoading = false;
   bool _isSaving = false;
@@ -93,6 +100,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   Set<String> _favoriteFoodKeys = <String>{};
   String _browseTab = 'recent';
   bool _isAfterMealExpanded = true;
+  bool _isSavedFoodsLoading = true;
   
   // User context
   int _dailyGoal = 2000;
@@ -103,6 +111,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   int _todayCarbs = 0;
   int _todayProtein = 0;
   int _todayFat = 0;
+  int _searchRequestId = 0;
 
   // Animation controllers
   late AnimationController _fabAnimationController;
@@ -121,6 +130,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchRetryTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _scrollController.dispose();
@@ -246,7 +256,13 @@ class _SearchFoodPageState extends State<SearchFoodPage>
 
   Future<void> _loadRecentAndFrequentFoods() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      if (!mounted) return;
+      setState(() {
+        _isSavedFoodsLoading = false;
+      });
+      return;
+    }
 
     final recentIds = <String>{};
     final recent = <FoodSearchResult>[];
@@ -312,6 +328,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       _recentFoods = recent.take(8).toList();
       _myFoods = myFoods;
       _favoriteFoodKeys = favoriteKeys;
+      _isSavedFoodsLoading = false;
     });
   }
 
@@ -451,20 +468,40 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   void _onSearchChanged(String value) {
     setState(() {
       _isSearching = value.isNotEmpty;
+      _errorMessage = null;
       if (value.isNotEmpty) {
         _isAfterMealExpanded = false;
       }
     });
     
     _debounce?.cancel();
+    _searchRetryTimer?.cancel();
     _debounce = Timer(
       const Duration(milliseconds: 400),
       () => _performSearch(value),
     );
   }
 
-  Future<void> _performSearch(String query) async {
+  bool _shouldAutoRetrySearch(String query) {
+    return mounted &&
+        _searchFocusNode.hasFocus &&
+        _searchController.text.trim() == query;
+  }
+
+  void _scheduleSearchRetry(String query) {
+    _searchRetryTimer?.cancel();
+    _searchRetryTimer = Timer(
+      const Duration(milliseconds: 700),
+      () => _performSearch(query, allowAutoRetry: true),
+    );
+  }
+
+  Future<void> _performSearch(
+    String query, {
+    bool allowAutoRetry = true,
+  }) async {
     final trimmed = query.trim();
+    final requestId = ++_searchRequestId;
     
     if (trimmed.isEmpty) {
       setState(() {
@@ -483,7 +520,11 @@ class _SearchFoodPageState extends State<SearchFoodPage>
     try {
       final results = await FoodSearchService.searchFoods(trimmed);
       
-      if (!mounted) return;
+      if (!mounted ||
+          requestId != _searchRequestId ||
+          _searchController.text.trim() != trimmed) {
+        return;
+      }
       
       setState(() {
         _searchResults = results;
@@ -493,10 +534,40 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         }
       });
     } on TimeoutException {
-      if (!mounted) return;
+      if (!mounted ||
+          requestId != _searchRequestId ||
+          _searchController.text.trim() != trimmed) {
+        return;
+      }
+      if (allowAutoRetry && _shouldAutoRetrySearch(trimmed)) {
+        setState(() {
+          _isLoading = true;
+          _errorMessage = null;
+        });
+        _scheduleSearchRetry(trimmed);
+        return;
+      }
       setState(() {
         _isLoading = false;
         _errorMessage = 'Search timed out. Please check your connection and try again.';
+      });
+    } catch (_) {
+      if (!mounted ||
+          requestId != _searchRequestId ||
+          _searchController.text.trim() != trimmed) {
+        return;
+      }
+      if (allowAutoRetry && _shouldAutoRetrySearch(trimmed)) {
+        setState(() {
+          _isLoading = true;
+          _errorMessage = null;
+        });
+        _scheduleSearchRetry(trimmed);
+        return;
+      }
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Unable to refresh results right now. Keep typing and we\'ll retry automatically.';
       });
     }
   }
@@ -531,9 +602,82 @@ class _SearchFoodPageState extends State<SearchFoodPage>
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     setState(() {
+      _searchController.clear();
+      _searchResults = [];
+      _isSearching = false;
+      _errorMessage = null;
       _selectedFoods.add(item);
       _fabAnimationController.forward();
     });
+  }
+
+  Future<void> _scanBarcodeAndAddToSelection() async {
+    try {
+      final scanResult = await BarcodeScanner.scan();
+      final barcode = scanResult.rawContent.trim();
+      if (barcode.isEmpty || !mounted) return;
+
+      final barcodeItems =
+          await Navigator.of(context).push<List<BarcodeSelectionItem>>(
+        MaterialPageRoute(
+          builder: (_) => MealSummaryPage(
+            mealType: widget.mealType,
+            foodName: null,
+            barcode: barcode,
+            returnSelectionOnly: true,
+          ),
+        ),
+      );
+
+      if (!mounted || barcodeItems == null || barcodeItems.isEmpty) return;
+
+      for (final barcodeItem in barcodeItems) {
+        _addFoodToSelection(_barcodeItemToSelection(barcodeItem));
+      }
+    } catch (e) {
+      _showError('Barcode scan failed. Please try again.');
+    }
+  }
+
+  SelectedSearchFoodItem _barcodeItemToSelection(BarcodeSelectionItem item) {
+    final baselineQuantity = item.baselineQuantity <= 0
+        ? 100.0
+        : item.baselineQuantity;
+    final scaleTo100 = 100 / baselineQuantity;
+    final servingLabel = '${baselineQuantity.toStringAsFixed(0)} ${item.unit}';
+
+    return SelectedSearchFoodItem(
+      result: FoodSearchResult(
+        id: 'barcode_${item.barcode}',
+        name: item.foodName,
+        subtitle: 'Scanned in manual add',
+        caloriesPer100g: item.baseCalories * scaleTo100,
+        proteinPer100g: item.baseProtein * scaleTo100,
+        carbsPer100g: item.baseCarbs * scaleTo100,
+        fatPer100g: item.baseFat * scaleTo100,
+        defaultQuantity: item.selectedQuantity,
+        quantityUnit: item.unit,
+        source: 'Manual Scan',
+        groupKey: 'barcode',
+        servingOptions: [
+          FoodServingOption(
+            label: servingLabel,
+            quantity: baselineQuantity,
+            unit: item.unit,
+          ),
+          FoodServingOption(
+            label: 'Selected amount',
+            quantity: item.selectedQuantity,
+            unit: item.unit,
+          ),
+        ],
+        matchScore: 120,
+      ),
+      quantity: item.selectedQuantity,
+      quantityUnit: item.unit,
+      servingLabel: servingLabel,
+      logSource: 'Barcode Scanned',
+    );
   }
 
   void _removeFood(int index) {
@@ -575,6 +719,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       final mealGroupId = _selectedFoods.length > 1
           ? FirebaseFirestore.instance.collection('tmp').doc().id
           : null;
+      final mealSource = _resolveMealSource();
       final combinedFoodName = _joinFoodNames(
         _selectedFoods.map((item) => item.result.name).toList(),
       );
@@ -596,7 +741,8 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           'date': dateStr,
           'time': timeStr,
           'weekday': weekdayStr,
-          'source': 'Manually Added',
+          'source': mealSource,
+          'itemSource': item.logSource,
           'sourceDb': item.result.source,
           'servingLabel': item.servingLabel,
           'caloriesPer100g': item.result.caloriesPer100g,
@@ -678,6 +824,19 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         setState(() => _isSaving = false);
       }
     }
+  }
+
+  String _resolveMealSource() {
+    final hasManual = _selectedFoods.any(
+      (item) => item.logSource == 'Manually Added',
+    );
+    final hasBarcode = _selectedFoods.any(
+      (item) => item.logSource == 'Barcode Scanned',
+    );
+
+    if (hasManual && hasBarcode) return 'Mixed Entry';
+    if (hasBarcode) return 'Barcode Scanned';
+    return 'Manually Added';
   }
 
   // ==========================================================================
@@ -790,6 +949,11 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           ],
         ),
         actions: [
+          IconButton(
+            onPressed: _scanBarcodeAndAddToSelection,
+            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+            tooltip: 'Scan barcode',
+          ),
           if (_selectedFoods.isNotEmpty)
             Center(
               child: Padding(
@@ -859,7 +1023,6 @@ class _SearchFoodPageState extends State<SearchFoodPage>
               ),
             ),
           ),
-          
           // Quick Filters (when not searching)
           if (!_isSearching) ...[
             const SizedBox(height: 12),
@@ -881,24 +1044,51 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   Widget _buildQuickFilter(String label, IconData icon, String tabValue) {
     final selected = _browseTab == tabValue;
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: FilterChip(
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: selected ? Colors.green : Colors.grey[600]),
-            const SizedBox(width: 4),
-            Text(label),
-          ],
-        ),
-        selected: selected,
-        onSelected: (_) {
+      padding: const EdgeInsets.only(right: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () {
           setState(() => _browseTab = tabValue);
         },
-        backgroundColor: Colors.white,
-        selectedColor: Colors.green.withOpacity(0.12),
-        checkmarkColor: Colors.green,
-        side: BorderSide(color: selected ? Colors.green : Colors.grey[300]!),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? Colors.green : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? Colors.green : Colors.grey[300]!,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: Colors.green.withOpacity(0.2),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: selected ? Colors.white : Colors.grey[700],
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? Colors.white : Colors.grey[800],
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -961,11 +1151,14 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                 color: Colors.grey[700],
               ),
             ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () => _performSearch(_searchController.text),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Try Again'),
+            const SizedBox(height: 12),
+            Text(
+              'Update the search text and the page will refresh automatically.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[600],
+              ),
             ),
           ],
         ),
@@ -1015,6 +1208,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }
 
   Widget _buildDefaultState() {
+    if (_isSavedFoodsLoading) {
+      return _buildSavedFoodsLoadingState();
+    }
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -1033,6 +1230,100 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           else
             ..._myFoods.map((food) => _buildFoodListTile(food)),
         ],
+      ],
+    );
+  }
+
+  Widget _buildSavedFoodsLoadingState() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildSectionHeader(
+          _browseTab == 'recent' ? 'Recent Manual Foods' : 'My Foods (Favorites)',
+        ),
+        const SizedBox(height: 8),
+        Shimmer.fromColors(
+          baseColor: Colors.grey[300]!,
+          highlightColor: Colors.grey[100]!,
+          child: Column(
+            children: List.generate(
+              4,
+              (_) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              height: 14,
+                              width: double.infinity,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              height: 12,
+                              width: 140,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: List.generate(
+                                3,
+                                (_) => Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: Container(
+                                    height: 20,
+                                    width: 52,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1203,6 +1494,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
     final mealCarbs = _selectedFoods.fold<double>(0, (sum, item) => sum + item.carbs);
     final mealProtein = _selectedFoods.fold<double>(0, (sum, item) => sum + item.protein);
     final mealFat = _selectedFoods.fold<double>(0, (sum, item) => sum + item.fat);
+    final maxExpandedSummaryHeight = MediaQuery.of(context).size.height * 0.42;
 
     return SafeArea(
       top: false,
@@ -1282,77 +1574,82 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                   crossFadeState: _isAfterMealExpanded
                       ? CrossFadeState.showFirst
                       : CrossFadeState.showSecond,
-                  firstChild: Column(
-                    children: [
-                      AfterMealSummary(
-                        dailyGoal: _dailyGoal,
-                        carbsTarget: _carbsTarget,
-                        proteinTarget: _proteinTarget,
-                        fatTarget: _fatTarget,
-                        todayCaloriesConsumed: _todayCalories,
-                        todayCarbsConsumed: _todayCarbs,
-                        todayProteinConsumed: _todayProtein,
-                        todayFatConsumed: _todayFat,
-                        mealCalories: mealCalories.round(),
-                        mealCarbs: mealCarbs.round(),
-                        mealProtein: mealProtein.round(),
-                        mealFat: mealFat.round(),
-                        margin: const EdgeInsets.fromLTRB(0, 12, 0, 0),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        constraints: const BoxConstraints(maxHeight: 180),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF9FBF7),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Colors.green.withOpacity(0.12),
+                  firstChild: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: maxExpandedSummaryHeight),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          AfterMealSummary(
+                            dailyGoal: _dailyGoal,
+                            carbsTarget: _carbsTarget,
+                            proteinTarget: _proteinTarget,
+                            fatTarget: _fatTarget,
+                            todayCaloriesConsumed: _todayCalories,
+                            todayCarbsConsumed: _todayCarbs,
+                            todayProteinConsumed: _todayProtein,
+                            todayFatConsumed: _todayFat,
+                            mealCalories: mealCalories.round(),
+                            mealCarbs: mealCarbs.round(),
+                            mealProtein: mealProtein.round(),
+                            mealFat: mealFat.round(),
+                            margin: const EdgeInsets.fromLTRB(0, 12, 0, 0),
                           ),
-                        ),
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: _selectedFoods.length,
-                          itemBuilder: (context, index) {
-                            final item = _selectedFoods[index];
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 2,
+                          const SizedBox(height: 12),
+                          Container(
+                            constraints: const BoxConstraints(maxHeight: 180),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF9FBF7),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.green.withOpacity(0.12),
                               ),
-                              title: Text(
-                                item.result.name,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(
-                                '${item.quantity.toStringAsFixed(0)} ${item.quantityUnit} • ${item.calories.round()} cal',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit_outlined, size: 18),
-                                    onPressed: () => _showEditDialog(index),
+                            ),
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: _selectedFoods.length,
+                              itemBuilder: (context, index) {
+                                final item = _selectedFoods[index];
+                                return ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 2,
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: () => _removeFood(index),
+                                  title: Text(
+                                    item.result.name,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+                                  subtitle: Text(
+                                    '${item.quantity.toStringAsFixed(0)} ${item.quantityUnit} • ${item.calories.round()} cal',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.edit_outlined, size: 18),
+                                        onPressed: () => _showEditDialog(index),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.close, size: 18),
+                                        onPressed: () => _removeFood(index),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                   secondChild: const SizedBox.shrink(),
                 ),

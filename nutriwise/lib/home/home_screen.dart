@@ -624,6 +624,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mealGroupId.isNotEmpty) {
         final existing = groupedManualMeals[mealGroupId];
         if (existing == null) {
+          final itemSource = (data['itemSource'] ?? data['source'] ?? 'Manually Added')
+              .toString();
+          final hasBarcodeItem = _isBarcodeItemSource(itemSource);
           groupedManualMeals[mealGroupId] = {
             'foodName': data['combinedFoodName'] ?? data['foodName'] ?? 'Unknown',
             'foodCount': (data['foodCount'] ?? 1),
@@ -636,13 +639,23 @@ class _HomeScreenState extends State<HomeScreen> {
             'mealType': data['mealType'] ?? 'Meal',
             'time': data['time'] ?? '',
             'date': data['date'] ?? '',
-            'source': data['source'] ?? 'Manually Added',
+            'source': _resolveGroupedManualSource(!hasBarcodeItem, hasBarcodeItem),
             'imageUrl': null,
             'mealId': mealGroupId,
             'createdAt': data['createdAt'],
             'isGrouped': true,
+            'entryFlow': 'manual',
+            'hasManualItemSource': !hasBarcodeItem,
+            'hasBarcodeItemSource': hasBarcodeItem,
           };
         } else {
+          final itemSource = (data['itemSource'] ?? data['source'] ?? 'Manually Added')
+              .toString();
+          final hasBarcodeItem = _isBarcodeItemSource(itemSource);
+          existing['hasBarcodeItemSource'] =
+              (existing['hasBarcodeItemSource'] == true) || hasBarcodeItem;
+          existing['hasManualItemSource'] =
+              (existing['hasManualItemSource'] == true) || !hasBarcodeItem;
           existing['calories'] = _safeNum(existing['calories']) + _safeNum(data['calories']);
           existing['carbs'] = _safeNum(existing['carbs']) + _safeNum(data['carbs']);
           existing['protein'] = _safeNum(existing['protein']) + _safeNum(data['protein']);
@@ -653,8 +666,15 @@ class _HomeScreenState extends State<HomeScreen> {
           final existingQuantity = (existing['quantity'] as num?)?.toDouble() ?? 0;
           final newQuantity = (data['quantity'] as num?)?.toDouble() ?? 0;
           existing['quantity'] = existingQuantity + newQuantity;
+          existing['source'] = _resolveGroupedManualSource(
+            existing['hasManualItemSource'] == true,
+            existing['hasBarcodeItemSource'] == true,
+          );
         }
       } else {
+        final itemSource = (data['itemSource'] ?? data['source'] ?? 'Manually Added')
+            .toString();
+        final hasBarcodeItem = _isBarcodeItemSource(itemSource);
         standaloneManualMeals.add({
           'foodName': data['foodName'] ?? 'Unknown',
           'foodCount': 1,
@@ -667,11 +687,12 @@ class _HomeScreenState extends State<HomeScreen> {
           'mealType': data['mealType'] ?? 'Meal',
           'time': data['time'] ?? '',
           'date': data['date'] ?? '',
-          'source': data['source'] ?? 'Manually Added',
+          'source': _resolveGroupedManualSource(!hasBarcodeItem, hasBarcodeItem),
           'imageUrl': null,
           'mealId': doc.id,
           'createdAt': data['createdAt'],
           'isGrouped': false,
+          'entryFlow': 'manual',
         });
       }
     }
@@ -697,6 +718,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (rawValue is num) return rawValue.toDouble();
     if (rawValue == null) return null;
     return double.tryParse(rawValue.toString());
+  }
+
+  bool _isBarcodeItemSource(String source) {
+    final normalized = source.trim().toLowerCase();
+    return normalized.contains('barcode');
+  }
+
+  String _resolveGroupedManualSource(bool hasManual, bool hasBarcode) {
+    if (hasManual && hasBarcode) return 'Mixed Entry';
+    if (hasBarcode) return 'Barcode Scanned';
+    return 'Manually Added';
   }
 
   String _formatMealQuantity(Map<String, dynamic> meal) {
@@ -1227,32 +1259,48 @@ class _HomeScreenState extends State<HomeScreen> {
                                       final source =
                                           (meal['source'] ?? 'Barcode')
                                               .toString();
-                                      final isAIDetected =
-                                          source == 'AI Detection';
-                                      final isManualAdded =
-                                          source == 'Manually Added';
-                                      final foodCount = _safeNum(
-                                        meal['foodCount'],
-                                      );
-                                      final isGrouped =
-                                          meal['isGrouped'] == true;
-                                      final quantityText =
-                                          _formatMealQuantity(meal);
-                                      final sourceColor = isAIDetected
-                                          ? Colors.green
-                                          : (isManualAdded
-                                                ? Colors.purple
-                                                : Colors.orange);
-                                      final sourceIcon = isAIDetected
-                                          ? Icons.camera_alt
-                                          : (isManualAdded
-                                                ? Icons.edit_note
-                                                : Icons.qr_code_2);
-                                      final sourceLabel = isAIDetected
-                                          ? 'AI detected'
-                                          : (isManualAdded
-                                                ? 'Manually added'
-                                                : 'Barcode scanned');
+                                        final isAIDetected =
+                                            source == 'AI Detection';
+                                        final isManualAdded =
+                                            source == 'Manually Added';
+                                        final isMixedEntry =
+                                            source == 'Mixed Entry';
+                                        final isManualFlow =
+                                            meal['entryFlow'] == 'manual';
+                                        final foodCount = _safeNum(
+                                          meal['foodCount'],
+                                        );
+                                        final isGrouped =
+                                            meal['isGrouped'] == true;
+                                        final quantityText =
+                                            _formatMealQuantity(meal);
+                                        final sourceColor = isAIDetected
+                                            ? Colors.green
+                                            : (isMixedEntry
+                                                  ? Colors.teal
+                                                  : (isManualFlow
+                                                        ? Colors.purple
+                                                  : (isManualAdded
+                                                  ? Colors.purple
+                                                  : Colors.orange)));
+                                        final sourceIcon = isAIDetected
+                                            ? Icons.camera_alt
+                                            : (isMixedEntry
+                                                  ? Icons.add_link
+                                                  : (isManualFlow
+                                                        ? Icons.edit_note
+                                                  : (isManualAdded
+                                                  ? Icons.edit_note
+                                                  : Icons.qr_code_2)));
+                                        final sourceLabel = isAIDetected
+                                            ? 'AI detected'
+                                            : (isMixedEntry
+                                                  ? 'Manual + barcode'
+                                                  : (isManualFlow && !isManualAdded
+                                                        ? 'Manual entry + barcode'
+                                                  : (isManualAdded
+                                                  ? 'Manually added'
+                                                  : 'Barcode scanned')));
 
                                       return Container(
                                         width: double.infinity,
