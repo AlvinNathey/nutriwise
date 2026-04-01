@@ -13,6 +13,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:barcode_scan2/barcode_scan2.dart';
+import 'package:nutriwise/food/meal_summary.dart';
+import 'package:nutriwise/food/search_food_page.dart';
 import 'package:nutriwise/services/food_collections.dart';
 
 // ============================================================================
@@ -666,10 +669,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
 
     // Create animations with curves
-   _calorieAnimation = _calorieAnimationController;
-_carbsAnimation   = _carbsAnimationController;
-_proteinAnimation = _proteinAnimationController;
-_fatAnimation     = _fatAnimationController;
+    _calorieAnimation = _calorieAnimationController;
+    _carbsAnimation = _carbsAnimationController;
+    _proteinAnimation = _proteinAnimationController;
+    _fatAnimation = _fatAnimationController;
 
     _fetchUserGoalsAndTodayIntake().then((_) {
       _loadModelsAndProcess();
@@ -2163,9 +2166,9 @@ _fatAnimation     = _fatAnimationController;
           .where('date', isEqualTo: dateStr)
           .get();
 
-      final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
-          .where('date', isEqualTo: dateStr)
-          .get();
+      final manualFoodsSnapshot = await userManualFoodsCollection(
+        user.uid,
+      ).where('date', isEqualTo: dateStr).get();
 
       for (var doc in barcodesSnapshot.docs) {
         final mealData = doc.data();
@@ -2952,6 +2955,8 @@ _fatAnimation     = _fatAnimationController;
             renderedX <= displayWidth &&
             renderedY >= 0 &&
             renderedY <= displayHeight) {
+          final isSourceAdded = _isSourceAddedFood(food);
+          final sourceLabel = _displaySourceLabel(food);
           labels.add(
             Positioned(
               left: renderedX.clamp(0, displayWidth - 120),
@@ -2983,15 +2988,27 @@ _fatAnimation     = _fatAnimationController;
                         color: Colors.black,
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${(food.confidence * 100).toInt()}%',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.green[700],
+                    if (!isSourceAdded) ...[
+                      const SizedBox(width: 4),
+                      Text(
+                        '${(food.confidence * 100).toInt()}%',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.green[700],
+                        ),
                       ),
-                    ),
+                    ] else ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        sourceLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blueGrey[700],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -3183,7 +3200,9 @@ _fatAnimation     = _fatAnimationController;
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: caloriesLeft >= 0 ? Colors.black87 : Colors.red,
+                          color: caloriesLeft >= 0
+                              ? Colors.black87
+                              : Colors.red,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -3191,7 +3210,9 @@ _fatAnimation     = _fatAnimationController;
                         caloriesLeft >= 0 ? 'kcal left' : 'kcal over',
                         style: TextStyle(
                           fontSize: 12,
-                          color: caloriesLeft >= 0 ? Colors.grey[600] : Colors.red[400],
+                          color: caloriesLeft >= 0
+                              ? Colors.grey[600]
+                              : Colors.red[400],
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -3470,10 +3491,14 @@ _fatAnimation     = _fatAnimationController;
   Widget _buildFoodCard(SegmentedFood food, int index) {
     // Calculate actual calories based on grams
     final displayCalories = food.actualCalories;
+    final isSourceAdded = _isSourceAddedFood(food);
+    final sourceLabel = _displaySourceLabel(food);
 
     // Get cropped/highlighted image for this food
     Widget foodImage;
-    if (_originalImage != null) {
+    if (isSourceAdded) {
+      foodImage = _buildSourceAddedFoodImage();
+    } else if (_originalImage != null) {
       final croppedImage = food.getHighlightedImage(_originalImage!);
       if (croppedImage != null) {
         // Convert img.Image to Uint8List for display
@@ -3639,60 +3664,74 @@ _fatAnimation     = _fatAnimationController;
                       ],
                     ),
                   ),
-                  // Confidence badge
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${(food.confidence * 100).toInt()}%',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                  if (!isSourceAdded)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${(food.confidence * 100).toInt()}%',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      food.foodName ?? 'Unknown',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        food.foodName ?? 'Unknown',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${food.gramsAmount}g',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                    Text(
-                      '$displayCalories kcal',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.green[700],
-                        fontWeight: FontWeight.w500,
+                      Text(
+                        '${food.gramsAmount}g',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                       ),
-                    ),
-                  ],
+                      Text(
+                        sourceLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isSourceAdded
+                              ? Colors.blueGrey[700]
+                              : Colors.grey[500],
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        '$displayCalories kcal',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -3915,251 +3954,205 @@ _fatAnimation     = _fatAnimationController;
     );
   }
 
-  void _showAddFoodDialog() {
-    final TextEditingController _foodNameController = TextEditingController();
-    final TextEditingController _caloriesController = TextEditingController(
-      text: '150',
-    );
-    final TextEditingController _carbsController = TextEditingController(
-      text: '30',
-    );
-    final TextEditingController _proteinController = TextEditingController(
-      text: '10',
-    );
-    final TextEditingController _fatController = TextEditingController(
-      text: '5',
-    );
-    final TextEditingController _gramsController = TextEditingController(
-      text: '100',
-    );
-
-    showDialog(
+  Future<void> _showAddFoodDialog() async {
+    final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Food Manually'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Add a food item that was not detected automatically.',
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _foodNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Food Name *',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g., Grilled Chicken',
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.search, color: Colors.green),
+                  title: const Text('Search Food'),
+                  subtitle: const Text('Find food and confirm quantity'),
+                  onTap: () => Navigator.pop(context, 'search'),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _gramsController,
-                decoration: const InputDecoration(
-                  labelText: 'Amount (grams) *',
-                  border: OutlineInputBorder(),
-                  hintText: '100',
+                ListTile(
+                  leading: const Icon(
+                    Icons.qr_code_scanner,
+                    color: Colors.blue,
+                  ),
+                  title: const Text('Scan Barcode'),
+                  subtitle: const Text('Scan package barcode and add food'),
+                  onTap: () => Navigator.pop(context, 'barcode'),
                 ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _caloriesController,
-                decoration: const InputDecoration(
-                  labelText: 'Calories per 100g',
-                  border: OutlineInputBorder(),
-                  hintText: '150',
-                ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Macros per 100g (optional):',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _carbsController,
-                      decoration: const InputDecoration(
-                        labelText: 'Carbs (g)',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                        hintText: '0.4',
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _proteinController,
-                      decoration: const InputDecoration(
-                        labelText: 'Protein (g)',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                        hintText: '0.2',
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _fatController,
-                      decoration: const InputDecoration(
-                        labelText: 'Fat (g)',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                        hintText: '0',
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
+        );
+      },
+    );
+
+    if (!mounted || action == null) return;
+
+    if (action == 'search') {
+      await _addFoodFromSearchFlow();
+      return;
+    }
+
+    if (action == 'barcode') {
+      await _addFoodFromBarcodeFlow();
+    }
+  }
+
+  Future<void> _addFoodFromSearchFlow() async {
+    final selected = await Navigator.of(context).push<SelectedSearchFoodItem>(
+      MaterialPageRoute(
+        builder: (_) => SearchFoodPage(
+          mealType: widget.mealType,
+          returnSelectionOnly: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (!mounted) return;
+      ),
+    );
 
-              final customName = _foodNameController.text.trim().isEmpty
-                  ? 'Custom Food'
-                  : _foodNameController.text.trim();
+    if (!mounted || selected == null) return;
 
-              // Parse values with validation
-              final grams = int.tryParse(_gramsController.text) ?? 100;
-              final calories = int.tryParse(_caloriesController.text) ?? 150;
-              // Parse macros as doubles first to handle decimal values (e.g., 0.4, 0.2)
-              // For manual food entry, use the exact value entered (rounded to int for storage)
-              // If empty, default to 0 (not 30/10/5) to allow low-macro foods
-              final carbsText = _carbsController.text.trim();
-              final carbs = carbsText.isEmpty
-                  ? 0
-                  : (double.tryParse(carbsText) ?? 0.0).round();
-              final proteinText = _proteinController.text.trim();
-              final protein = proteinText.isEmpty
-                  ? 0
-                  : (double.tryParse(proteinText) ?? 0.0).round();
-              final fatText = _fatController.text.trim();
-              final fat = fatText.isEmpty
-                  ? 0
-                  : (double.tryParse(fatText) ?? 0.0).round();
+    setState(() {
+      _segmentedFoods.add(
+        _segmentedFoodFromSearchItem(
+          selected,
+          segmentationSource: 'Manual Search',
+        ),
+      );
+    });
+    _updateAnimations();
+  }
 
-              // Validate grams
-              final validGrams = grams.clamp(
-                kMinPortionGrams,
-                kMaxPortionGrams,
-              );
+  Future<void> _addFoodFromBarcodeFlow() async {
+    try {
+      final scanResult = await BarcodeScanner.scan();
+      final barcode = scanResult.rawContent.trim();
+      if (barcode.isEmpty || !mounted) return;
 
-              // Create a new food item with improved mask based on image dimensions
-              int maskWidth = 256;
-              int maskHeight = 256;
+      final barcodeItems = await Navigator.of(context)
+          .push<List<BarcodeSelectionItem>>(
+            MaterialPageRoute(
+              builder: (_) => MealSummaryPage(
+                mealType: widget.mealType,
+                foodName: null,
+                barcode: barcode,
+                returnSelectionOnly: true,
+              ),
+            ),
+          );
 
-              if (_processedImage != null) {
-                maskWidth = _processedImage!.width;
-                maskHeight = _processedImage!.height;
-              }
+      if (!mounted || barcodeItems == null || barcodeItems.isEmpty) return;
 
-              final mask = Uint8List(maskWidth * maskHeight);
+      setState(() {
+        for (final item in barcodeItems) {
+          _segmentedFoods.add(
+            _segmentedFoodFromBarcodeItem(item, segmentationSource: 'Barcode'),
+          );
+        }
+      });
+      _updateAnimations();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Barcode scan failed: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 
-              // Fill center region (improved bounding box calculation)
-              final centerX = maskWidth ~/ 2;
-              final centerY = maskHeight ~/ 2;
-              final boxWidth = (maskWidth * 0.4).round();
-              final boxHeight = (maskHeight * 0.4).round();
+  SegmentedFood _segmentedFoodFromSearchItem(
+    SelectedSearchFoodItem item, {
+    required String segmentationSource,
+  }) {
+    final placeholder = _buildManualPlaceholderMask();
+    return SegmentedFood(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      boundingBox: placeholder.boundingBox,
+      mask: placeholder.mask,
+      maskWidth: placeholder.maskWidth,
+      maskHeight: placeholder.maskHeight,
+      confidence: 0.9,
+      foodName: item.result.name,
+      caloriesPer100g: item.result.caloriesPer100g.round(),
+      macrosPer100g: {
+        'carbs': item.result.carbsPer100g.round(),
+        'protein': item.result.proteinPer100g.round(),
+        'fat': item.result.fatPer100g.round(),
+      },
+      gramsAmount: item.grams.round().clamp(kMinPortionGrams, kMaxPortionGrams),
+      segmentationSource: segmentationSource,
+      classificationSource: item.logSource,
+    );
+  }
 
-              for (
-                int y = (centerY - boxHeight ~/ 2).clamp(0, maskHeight);
-                y < (centerY + boxHeight ~/ 2).clamp(0, maskHeight);
-                y++
-              ) {
-                for (
-                  int x = (centerX - boxWidth ~/ 2).clamp(0, maskWidth);
-                  x < (centerX + boxWidth ~/ 2).clamp(0, maskWidth);
-                  x++
-                ) {
-                  mask[y * maskWidth + x] = 255;
-                }
-              }
+  SegmentedFood _segmentedFoodFromBarcodeItem(
+    BarcodeSelectionItem item, {
+    required String segmentationSource,
+  }) {
+    final baseline = item.baselineQuantity <= 0 ? 100.0 : item.baselineQuantity;
+    final scaleTo100 = 100.0 / baseline;
+    final placeholder = _buildManualPlaceholderMask();
+    return SegmentedFood(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      boundingBox: placeholder.boundingBox,
+      mask: placeholder.mask,
+      maskWidth: placeholder.maskWidth,
+      maskHeight: placeholder.maskHeight,
+      confidence: 0.9,
+      foodName: item.foodName,
+      caloriesPer100g: (item.baseCalories * scaleTo100).round(),
+      macrosPer100g: {
+        'carbs': (item.baseCarbs * scaleTo100).round(),
+        'protein': (item.baseProtein * scaleTo100).round(),
+        'fat': (item.baseFat * scaleTo100).round(),
+      },
+      gramsAmount: item.selectedQuantity.round().clamp(
+        kMinPortionGrams,
+        kMaxPortionGrams,
+      ),
+      segmentationSource: segmentationSource,
+      classificationSource: 'Barcode Scanned',
+    );
+  }
 
-              // Calculate bounding box from mask
-              int minX = maskWidth, minY = maskHeight, maxX = 0, maxY = 0;
-              bool hasMask = false;
+  ({int maskWidth, int maskHeight, Uint8List mask, Rect boundingBox})
+  _buildManualPlaceholderMask() {
+    int maskWidth = 256;
+    int maskHeight = 256;
+    if (_processedImage != null) {
+      maskWidth = _processedImage!.width;
+      maskHeight = _processedImage!.height;
+    }
 
-              for (int y = 0; y < maskHeight; y++) {
-                for (int x = 0; x < maskWidth; x++) {
-                  if (mask[y * maskWidth + x] > 0) {
-                    hasMask = true;
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
-                  }
-                }
-              }
+    final mask = Uint8List(maskWidth * maskHeight);
+    final centerX = maskWidth ~/ 2;
+    final centerY = maskHeight ~/ 2;
+    final boxWidth = (maskWidth * 0.4).round();
+    final boxHeight = (maskHeight * 0.4).round();
 
-              if (!hasMask) {
-                // Fallback to center region
-                minX = centerX - boxWidth ~/ 2;
-                minY = centerY - boxHeight ~/ 2;
-                maxX = centerX + boxWidth ~/ 2;
-                maxY = centerY + boxHeight ~/ 2;
-              }
+    final startY = (centerY - boxHeight ~/ 2).clamp(0, maskHeight - 1);
+    final endY = (centerY + boxHeight ~/ 2).clamp(1, maskHeight);
+    final startX = (centerX - boxWidth ~/ 2).clamp(0, maskWidth - 1);
+    final endX = (centerX + boxWidth ~/ 2).clamp(1, maskWidth);
 
-              if (mounted) {
-                setState(() {
-                  _segmentedFoods.add(
-                    SegmentedFood(
-                      id: DateTime.now().millisecondsSinceEpoch.toString(),
-                      boundingBox: Rect.fromLTRB(
-                        minX.toDouble(),
-                        minY.toDouble(),
-                        maxX.toDouble(),
-                        maxY.toDouble(),
-                      ),
-                      mask: mask,
-                      maskWidth: maskWidth,
-                      maskHeight: maskHeight,
-                      confidence: 0.5,
-                      foodName: customName,
-                      caloriesPer100g: calories,
-                      macrosPer100g: {
-                        'carbs': carbs,
-                        'protein': protein,
-                        'fat': fat,
-                      },
-                      gramsAmount: validGrams,
-                      segmentationSource: 'Manual',
-                    ),
-                  );
-                });
-                _updateAnimations();
-              }
+    for (int y = startY; y < endY; y++) {
+      for (int x = startX; x < endX; x++) {
+        mask[y * maskWidth + x] = 255;
+      }
+    }
 
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            child: const Text('Add'),
-          ),
-        ],
+    return (
+      maskWidth: maskWidth,
+      maskHeight: maskHeight,
+      mask: mask,
+      boundingBox: Rect.fromLTRB(
+        startX.toDouble(),
+        startY.toDouble(),
+        endX.toDouble(),
+        endY.toDouble(),
       ),
     );
   }
@@ -4510,6 +4503,7 @@ _fatAnimation     = _fatAnimationController;
       final List<Map<String, dynamic>> foodItemsData = [];
 
       for (final food in _segmentedFoods) {
+        final itemSource = (food.segmentationSource ?? '').trim();
         foodItemsData.add({
           'id': food.id,
           'foodName': food.foodName ?? 'Unknown',
@@ -4522,6 +4516,7 @@ _fatAnimation     = _fatAnimationController;
           'macrosPer100g': food.macrosPer100g,
           'confidence': food.confidence,
           'segmentationSource': food.segmentationSource,
+          'itemSource': itemSource.isEmpty ? 'AI Detection' : itemSource,
           'classificationSource': food.classificationSource,
           'boundingBox': {
             'left': food.boundingBox.left,
@@ -4535,6 +4530,7 @@ _fatAnimation     = _fatAnimationController;
       // Step 3: Calculate totals for this meal
       final totalCalories = _calculateTotalCalories();
       final totalMacros = _calculateTotalMacros();
+      final mealSource = _resolveMealSourceFromSegments();
 
       // Step 4: Save ONE document to "meals" subcollection
       print(
@@ -4562,6 +4558,7 @@ _fatAnimation     = _fatAnimationController;
             'totalCarbs': totalMacros['carbs'],
             'totalProtein': totalMacros['protein'],
             'totalFat': totalMacros['fat'],
+            'source': mealSource,
 
             // ALL food items in one array
             'foodItems': foodItemsData,
@@ -4640,6 +4637,97 @@ _fatAnimation     = _fatAnimationController;
   }
 
   // Continue to batch 8...
+
+  bool _isBarcodeSegmentSource(String source) {
+    return source.toLowerCase().contains('barcode');
+  }
+
+  bool _isManualSegmentSource(String source) {
+    final normalized = source.toLowerCase();
+    return normalized.contains('manual');
+  }
+
+  String _resolveMealSourceFromSegments() {
+    bool hasAIDetected = false;
+    bool hasManualAdded = false;
+    bool hasBarcodeAdded = false;
+
+    for (final food in _segmentedFoods) {
+      final source = (food.segmentationSource ?? '').trim();
+      if (source.isEmpty) {
+        hasAIDetected = true;
+        continue;
+      }
+      if (_isBarcodeSegmentSource(source)) {
+        hasBarcodeAdded = true;
+      } else if (_isManualSegmentSource(source)) {
+        hasManualAdded = true;
+      } else {
+        hasAIDetected = true;
+      }
+    }
+
+    final hasAdded = hasManualAdded || hasBarcodeAdded;
+    if ((hasAIDetected && hasAdded) || (hasManualAdded && hasBarcodeAdded)) {
+      return 'Mixed Entry';
+    }
+    if (hasBarcodeAdded) return 'Barcode Scanned';
+    if (hasManualAdded) return 'Manually Added';
+    return 'AI Detection';
+  }
+
+  bool _isSourceAddedFood(SegmentedFood food) {
+    final source = (food.segmentationSource ?? '').trim();
+    return _isBarcodeSegmentSource(source) || _isManualSegmentSource(source);
+  }
+
+  String _displaySourceLabel(SegmentedFood food) {
+    final source = (food.segmentationSource ?? '').trim();
+    if (_isBarcodeSegmentSource(source)) {
+      return 'Barcode Scanned';
+    }
+    if (_isManualSegmentSource(source)) {
+      return 'Manually Added';
+    }
+    return 'AI Detected';
+  }
+
+  Widget _buildSourceAddedFoodImage() {
+    return Container(
+      width: 140,
+      height: 112,
+      color: const Color(0xFFF2F5F0),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.restaurant,
+                size: 30,
+                color: Colors.green,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Added Food',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[700],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ============================================================================
@@ -5727,8 +5815,10 @@ class SemiCircleProgressPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final radius =
-        math.min((size.width / 2) - strokeWidth / 2, size.height - strokeWidth / 2);
+    final radius = math.min(
+      (size.width / 2) - strokeWidth / 2,
+      size.height - strokeWidth / 2,
+    );
     final center = Offset(size.width / 2, size.height - strokeWidth / 2);
 
     final backgroundPaint = Paint()
@@ -5790,8 +5880,10 @@ class AnimatedSemiCircleProgressPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final radius =
-        math.min((size.width / 2) - strokeWidth / 2, size.height - strokeWidth / 2);
+    final radius = math.min(
+      (size.width / 2) - strokeWidth / 2,
+      size.height - strokeWidth / 2,
+    );
     final center = Offset(size.width / 2, size.height - strokeWidth / 2);
 
     final backgroundPaint = Paint()

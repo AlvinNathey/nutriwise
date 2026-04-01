@@ -74,9 +74,9 @@ Future<List<FoodLog>> fetchLoggedFoods() async {
       .collection('barcodes')
       .orderBy('createdAt', descending: true)
       .get();
-  final manualSnapshot = await userManualFoodsCollection(user.uid)
-      .orderBy('createdAt', descending: true)
-      .get();
+  final manualSnapshot = await userManualFoodsCollection(
+    user.uid,
+  ).orderBy('createdAt', descending: true).get();
 
   final logs = [
     ...snapshot.docs.map((doc) {
@@ -111,8 +111,8 @@ List<FoodLog> _buildGroupedManualLogs(
     final mealGroupId = (data['mealGroupId'] ?? '').toString().trim();
     if (mealGroupId.isEmpty) {
       final date = _parseCreatedAt(data['createdAt']);
-      final itemSource = (data['itemSource'] ?? data['source'] ?? 'Manually Added')
-          .toString();
+      final itemSource =
+          (data['itemSource'] ?? data['source'] ?? 'Manually Added').toString();
       final hasBarcodeItem = _isBarcodeItemSource(itemSource);
       standalone.add(
         FoodLog(
@@ -149,15 +149,19 @@ List<FoodLog> _buildGroupedManualLogs(
         (doc.data()['itemSource'] ?? doc.data()['source'] ?? '').toString(),
       ),
     );
-    final resolvedSource = _resolveGroupedManualSource(!hasBarcodeItem, hasBarcodeItem);
+    final resolvedSource = _resolveGroupedManualSource(
+      !hasBarcodeItem,
+      hasBarcodeItem,
+    );
 
     return FoodLog(
       id: groupDocs.first.id,
       mealType: (first['mealType'] ?? 'Meal').toString(),
       time: _formatTimeFromDate(createdAt),
-      foodName: (first['combinedFoodName'] ??
-              (foodNames.isEmpty ? 'Meal' : foodNames.join(', ')))
-          .toString(),
+      foodName:
+          (first['combinedFoodName'] ??
+                  (foodNames.isEmpty ? 'Meal' : foodNames.join(', ')))
+              .toString(),
       calories: totalCalories,
       createdAt: createdAt,
       source: resolvedSource,
@@ -174,6 +178,43 @@ List<FoodLog> _buildGroupedManualLogs(
 bool _isBarcodeItemSource(String source) {
   final normalized = source.trim().toLowerCase();
   return normalized.contains('barcode');
+}
+
+bool _isManualMealsCollectionItemSource(String source) {
+  final normalized = source.trim().toLowerCase();
+  return normalized.contains('manual');
+}
+
+String _resolveMealsCollectionSource(List<dynamic> foodItems) {
+  bool hasAIDetected = false;
+  bool hasManual = false;
+  bool hasBarcode = false;
+
+  for (final item in foodItems) {
+    if (item is! Map<String, dynamic>) continue;
+    final source = (item['itemSource'] ?? item['segmentationSource'] ?? '')
+        .toString()
+        .trim();
+    if (source.isEmpty) {
+      hasAIDetected = true;
+      continue;
+    }
+    if (_isBarcodeItemSource(source)) {
+      hasBarcode = true;
+    } else if (_isManualMealsCollectionItemSource(source)) {
+      hasManual = true;
+    } else {
+      hasAIDetected = true;
+    }
+  }
+
+  if ((hasAIDetected && (hasManual || hasBarcode)) ||
+      (hasManual && hasBarcode)) {
+    return 'Mixed Entry';
+  }
+  if (hasBarcode) return 'Barcode Scanned';
+  if (hasManual) return 'Manually Added';
+  return 'AI Detection';
 }
 
 String _resolveGroupedManualSource(bool hasManual, bool hasBarcode) {
@@ -210,6 +251,12 @@ Future<List<FoodLog>> fetchMealLogs() async {
       foodName: foodName,
       calories: (data['totalCalories'] ?? 0).round(),
       createdAt: date,
+      source:
+          (data['source'] ??
+                  _resolveMealsCollectionSource(
+                    (data['foodItems'] as List<dynamic>?) ?? const [],
+                  ))
+              .toString(),
       imageUrl: data['originalImageUrl'] as String?,
       isMeal: true,
       foodItems: (data['foodItems'] as List<dynamic>?)
@@ -319,16 +366,14 @@ List<TimelineSection> groupLogsByTimeline(List<FoodLog> logs) {
 
   final List<TimelineSection> sections = [];
 
-  final recentSections = grouped.values
-      .where((s) => s.type == SectionType.day)
-      .toList()
-    ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+  final recentSections =
+      grouped.values.where((s) => s.type == SectionType.day).toList()
+        ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
   sections.addAll(recentSections);
 
-  final monthSections = grouped.values
-      .where((s) => s.type == SectionType.monthParent)
-      .toList()
-    ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
+  final monthSections =
+      grouped.values.where((s) => s.type == SectionType.monthParent).toList()
+        ..sort((a, b) => b.sortDate.compareTo(a.sortDate));
 
   for (final month in monthSections) {
     sections.add(month);
@@ -365,16 +410,36 @@ String _weekdayName(int weekday) {
 
 String _monthYear(DateTime date) {
   const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
   return '${months[date.month - 1]} ${date.year}';
 }
 
 String _shortMonth(DateTime date) {
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   return months[date.month - 1];
 }
@@ -385,9 +450,19 @@ String _dayMonth(DateTime date) {
 
 String _weekRangeLabel(DateTime date) {
   final daysInMonth = [
-    0, 31,
+    0,
+    31,
     date.year % 4 == 0 ? 29 : 28,
-    31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
   ];
   final weekOfMonth = ((date.day - 1) ~/ 7) + 1;
   final startDay = (weekOfMonth - 1) * 7 + 1;
@@ -398,10 +473,14 @@ String _weekRangeLabel(DateTime date) {
 String _ordinal(int day) {
   if (day >= 11 && day <= 13) return '${day}th';
   switch (day % 10) {
-    case 1: return '${day}st';
-    case 2: return '${day}nd';
-    case 3: return '${day}rd';
-    default: return '${day}th';
+    case 1:
+      return '${day}st';
+    case 2:
+      return '${day}nd';
+    case 3:
+      return '${day}rd';
+    default:
+      return '${day}th';
   }
 }
 
@@ -431,8 +510,10 @@ String _formatTimeTo12Hour(String raw, {required DateTime fallback}) {
   if (minute < 0 || minute > 59) return _formatTimeFromDate(fallback);
   if (amPm != null) {
     if (hour < 1 || hour > 12) return _formatTimeFromDate(fallback);
-    if (amPm == 'AM' && hour == 12) hour = 0;
-    else if (amPm == 'PM' && hour != 12) hour += 12;
+    if (amPm == 'AM' && hour == 12)
+      hour = 0;
+    else if (amPm == 'PM' && hour != 12)
+      hour += 12;
   } else {
     if (hour < 0 || hour > 23) return _formatTimeFromDate(fallback);
   }
@@ -463,10 +544,7 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Future<List<TimelineSection>> _fetchAndGroup() async {
-    final results = await Future.wait([
-      fetchLoggedFoods(),
-      fetchMealLogs(),
-    ]);
+    final results = await Future.wait([fetchLoggedFoods(), fetchMealLogs()]);
     final allLogs = [...results[0], ...results[1]]
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return groupLogsByTimeline(allLogs);
@@ -522,10 +600,7 @@ class _HistoryPageState extends State<HistoryPage> {
             color: Colors.green,
             onRefresh: () async => _refreshLogs(),
             child: ListView.builder(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               itemCount: sections.length,
               itemBuilder: (context, idx) {
                 final section = sections[idx];
@@ -683,8 +758,10 @@ class _HistoryPageState extends State<HistoryPage> {
                 final dayId = '${section.id}-$dayKey';
                 final isDayExpanded = _expandedSections[dayId] ?? true;
                 final dayMealCount = dayLogs.length;
-                final dayCalTotal =
-                    dayLogs.fold(0, (sum, l) => sum + l.calories);
+                final dayCalTotal = dayLogs.fold(
+                  0,
+                  (sum, l) => sum + l.calories,
+                );
                 final dayLabel =
                     '${_weekdayName(dayDate.weekday)}, ${_ordinal(dayDate.day)} ${_shortMonth(dayDate)}';
 
@@ -792,10 +869,7 @@ class _HistoryPageState extends State<HistoryPage> {
             left: 3.5,
             top: 36,
             bottom: 0,
-            child: Container(
-              width: 1,
-              color: Colors.green.withOpacity(0.3),
-            ),
+            child: Container(width: 1, color: Colors.green.withOpacity(0.3)),
           ),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -829,10 +903,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   ),
                   Text(
                     '$mealCount meal${mealCount == 1 ? '' : 's'}  ·  $calTotal kcal',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey.shade500,
-                    ),
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                   ),
                   const SizedBox(width: 4),
                   Icon(
@@ -938,9 +1009,9 @@ class _HistoryPageState extends State<HistoryPage> {
                     Text(
                       log.foodItems != null && log.foodItems!.isNotEmpty
                           ? log.foodItems!
-                              .map((f) => (f['foodName'] as String?) ?? '')
-                              .where((n) => n.isNotEmpty)
-                              .join(', ')
+                                .map((f) => (f['foodName'] as String?) ?? '')
+                                .where((n) => n.isNotEmpty)
+                                .join(', ')
                           : log.foodName,
                       style: const TextStyle(
                         fontSize: 14,
@@ -953,10 +1024,7 @@ class _HistoryPageState extends State<HistoryPage> {
                     const SizedBox(height: 2),
                     Text(
                       '${log.calories} kcal',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.green[700],
-                      ),
+                      style: TextStyle(fontSize: 13, color: Colors.green[700]),
                     ),
                   ],
                 ),
@@ -969,11 +1037,11 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Widget _imagePlaceholder() => Container(
-        width: 80,
-        height: 80,
-        color: Colors.grey[200],
-        child: const Icon(Icons.image, color: Colors.grey),
-      );
+    width: 80,
+    height: 80,
+    color: Colors.grey[200],
+    child: const Icon(Icons.image, color: Colors.grey),
+  );
 
   // ── Barcode scanned food card ──────────────────────────────────
 
@@ -985,20 +1053,24 @@ class _HistoryPageState extends State<HistoryPage> {
     final icon = isAi
         ? Icons.camera_alt
         : (isMixed
-            ? Icons.add_link
-            : ((isManualFlow || isManual) ? Icons.edit_note : Icons.qr_code_2));
+              ? Icons.add_link
+              : ((isManualFlow || isManual)
+                    ? Icons.edit_note
+                    : Icons.qr_code_2));
     final accentColor = isAi
         ? Colors.green
         : (isMixed
-            ? Colors.teal
-            : ((isManualFlow || isManual) ? Colors.purple : Colors.green));
+              ? Colors.teal
+              : ((isManualFlow || isManual) ? Colors.purple : Colors.green));
     final sourceLabel = isManual
         ? 'Manually Added'
         : (isAi
-            ? 'AI Detected'
-            : (isMixed
-                ? 'Manual + Barcode'
-                : (isManualFlow ? 'Manual entry + barcode' : 'Barcode Scanned')));
+              ? 'AI Detected'
+              : (isMixed
+                    ? 'Manual + Barcode'
+                    : (isManualFlow
+                          ? 'Manual entry + barcode'
+                          : 'Barcode Scanned')));
 
     return GestureDetector(
       onTap: log.canEdit
@@ -1033,7 +1105,9 @@ class _HistoryPageState extends State<HistoryPage> {
                   Icon(icon, size: 36, color: accentColor),
                   const SizedBox(height: 4),
                   Text(
-                    (isManualFlow || isManual) ? 'Manual' : (isAi ? 'AI' : 'Scanned'),
+                    (isManualFlow || isManual)
+                        ? 'Manual'
+                        : (isAi ? 'AI' : 'Scanned'),
                     style: TextStyle(
                       fontSize: 12,
                       color: accentColor,
@@ -1081,10 +1155,7 @@ class _HistoryPageState extends State<HistoryPage> {
                     const SizedBox(height: 2),
                     Text(
                       '${log.calories} kcal',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.green[700],
-                      ),
+                      style: TextStyle(fontSize: 13, color: Colors.green[700]),
                     ),
                     const SizedBox(height: 2),
                     Text(

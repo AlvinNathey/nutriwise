@@ -65,34 +65,35 @@ class SelectedSearchFoodItem {
 class SearchFoodPage extends StatefulWidget {
   final String mealType;
   final DateTime? selectedDate;
+  final bool returnSelectionOnly;
 
   const SearchFoodPage({
     super.key,
     required this.mealType,
     this.selectedDate,
+    this.returnSelectionOnly = false,
   });
 
   @override
   State<SearchFoodPage> createState() => _SearchFoodPageState();
 }
 
-class _SearchFoodPageState extends State<SearchFoodPage> 
+class _SearchFoodPageState extends State<SearchFoodPage>
     with TickerProviderStateMixin {
-  
   // Controllers
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
-  
+
   // State
   final List<SelectedSearchFoodItem> _selectedFoods = [];
   Timer? _debounce;
   Timer? _searchRetryTimer;
-  
+
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isSearching = false;
-  
+
   String? _errorMessage;
   List<FoodSearchResult> _searchResults = [];
   List<FoodSearchResult> _recentFoods = [];
@@ -101,7 +102,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   String _browseTab = 'recent';
   bool _isAfterMealExpanded = true;
   bool _isSavedFoodsLoading = true;
-  
+
   // User context
   int _dailyGoal = 2000;
   int _carbsTarget = 250;
@@ -115,7 +116,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
 
   // Animation controllers
   late AnimationController _fabAnimationController;
-  
+
   @override
   void initState() {
     super.initState();
@@ -151,7 +152,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
 
     try {
       final dateStr = _formatDate(widget.selectedDate ?? DateTime.now());
-      
+
       // Parallel fetching for better performance
       final results = await Future.wait([
         _fetchUserGoals(user.uid),
@@ -163,12 +164,12 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       setState(() {
         final goals = results[0];
         final totals = results[1];
-        
+
         _dailyGoal = goals['calories'] ?? 2000;
         _carbsTarget = goals['carbs'] ?? 250;
         _proteinTarget = goals['protein'] ?? 150;
         _fatTarget = goals['fat'] ?? 70;
-        
+
         _todayCalories = totals['calories'] ?? 0;
         _todayCarbs = totals['carbs'] ?? 0;
         _todayProtein = totals['protein'] ?? 0;
@@ -187,7 +188,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           .collection('users')
           .doc(userId)
           .get();
-      
+
       final data = doc.data() ?? {};
       return {
         'calories': ((data['calories'] ?? 2000) as num).round(),
@@ -200,9 +201,12 @@ class _SearchFoodPageState extends State<SearchFoodPage>
     }
   }
 
-  Future<Map<String, int>> _fetchTodayTotals(String userId, String dateStr) async {
+  Future<Map<String, int>> _fetchTodayTotals(
+    String userId,
+    String dateStr,
+  ) async {
     int calories = 0, carbs = 0, protein = 0, fat = 0;
-    
+
     try {
       // Fetch meals
       final mealsQuery = await FirebaseFirestore.instance
@@ -228,9 +232,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           .where('date', isEqualTo: dateStr)
           .get();
 
-      final manualFoodsQuery = await userManualFoodsCollection(userId)
-          .where('date', isEqualTo: dateStr)
-          .get();
+      final manualFoodsQuery = await userManualFoodsCollection(
+        userId,
+      ).where('date', isEqualTo: dateStr).get();
 
       for (final doc in barcodesQuery.docs) {
         final data = doc.data();
@@ -248,7 +252,12 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         fat += ((data['fat'] ?? 0) as num).round();
       }
 
-      return {'calories': calories, 'carbs': carbs, 'protein': protein, 'fat': fat};
+      return {
+        'calories': calories,
+        'carbs': carbs,
+        'protein': protein,
+        'fat': fat,
+      };
     } catch (e) {
       throw Exception('Failed to fetch today totals: $e');
     }
@@ -270,10 +279,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
     final favoriteKeys = <String>{};
 
     try {
-      final recentSnapshot = await userManualFoodsCollection(user.uid)
-          .orderBy('createdAt', descending: true)
-          .limit(30)
-          .get();
+      final recentSnapshot = await userManualFoodsCollection(
+        user.uid,
+      ).orderBy('createdAt', descending: true).limit(30).get();
 
       for (final doc in recentSnapshot.docs) {
         _addRecentFoodFromMap(recent, recentIds, doc.data());
@@ -383,11 +391,14 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }) {
     final name = (data['foodName'] ?? data['name'] ?? '').toString().trim();
     final unit = (data['unit'] ?? data['quantityUnit'] ?? 'g').toString();
-    final quantity = ((data['quantity'] ?? data['defaultQuantity'] ?? 100) as num)
-        .toDouble();
+    final quantity =
+        ((data['quantity'] ?? data['defaultQuantity'] ?? 100) as num)
+            .toDouble();
     return FoodSearchResult(
-      id: (data['id'] ?? 'saved_${name.toLowerCase().replaceAll(RegExp(r'\\s+'), '_')}')
-          .toString(),
+      id:
+          (data['id'] ??
+                  'saved_${name.toLowerCase().replaceAll(RegExp(r'\\s+'), '_')}')
+              .toString(),
       name: name,
       subtitle: (data['subtitle'] ?? 'Saved food').toString(),
       caloriesPer100g: ((data['caloriesPer100g'] ?? 0) as num).toDouble(),
@@ -473,7 +484,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         _isAfterMealExpanded = false;
       }
     });
-    
+
     _debounce?.cancel();
     _searchRetryTimer?.cancel();
     _debounce = Timer(
@@ -502,7 +513,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }) async {
     final trimmed = query.trim();
     final requestId = ++_searchRequestId;
-    
+
     if (trimmed.isEmpty) {
       setState(() {
         _searchResults = [];
@@ -519,13 +530,13 @@ class _SearchFoodPageState extends State<SearchFoodPage>
 
     try {
       final results = await FoodSearchService.searchFoods(trimmed);
-      
+
       if (!mounted ||
           requestId != _searchRequestId ||
           _searchController.text.trim() != trimmed) {
         return;
       }
-      
+
       setState(() {
         _searchResults = results;
         _isLoading = false;
@@ -549,7 +560,8 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       }
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Search timed out. Please check your connection and try again.';
+        _errorMessage =
+            'Search timed out. Please check your connection and try again.';
       });
     } catch (_) {
       if (!mounted ||
@@ -567,7 +579,8 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       }
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Unable to refresh results right now. Keep typing and we\'ll retry automatically.';
+        _errorMessage =
+            'Unable to refresh results right now. Keep typing and we\'ll retry automatically.';
       });
     }
   }
@@ -576,7 +589,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   // FOOD SELECTION
   // ==========================================================================
 
-  Future<void> _showFoodDetail(FoodSearchResult result, {bool isQuickAdd = false}) async {
+  Future<void> _showFoodDetail(
+    FoodSearchResult result, {
+    bool isQuickAdd = false,
+  }) async {
     try {
       final selected = await Navigator.of(context).push<SelectedSearchFoodItem>(
         MaterialPageRoute(
@@ -589,6 +605,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       );
 
       if (selected != null && mounted) {
+        if (widget.returnSelectionOnly) {
+          Navigator.of(context).pop(selected);
+          return;
+        }
         _addFoodToSelection(selected);
       }
     } catch (e) {
@@ -617,17 +637,17 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       final barcode = scanResult.rawContent.trim();
       if (barcode.isEmpty || !mounted) return;
 
-      final barcodeItems =
-          await Navigator.of(context).push<List<BarcodeSelectionItem>>(
-        MaterialPageRoute(
-          builder: (_) => MealSummaryPage(
-            mealType: widget.mealType,
-            foodName: null,
-            barcode: barcode,
-            returnSelectionOnly: true,
-          ),
-        ),
-      );
+      final barcodeItems = await Navigator.of(context)
+          .push<List<BarcodeSelectionItem>>(
+            MaterialPageRoute(
+              builder: (_) => MealSummaryPage(
+                mealType: widget.mealType,
+                foodName: null,
+                barcode: barcode,
+                returnSelectionOnly: true,
+              ),
+            ),
+          );
 
       if (!mounted || barcodeItems == null || barcodeItems.isEmpty) return;
 
@@ -761,29 +781,30 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       if (!mounted) return;
 
       final savedRecentFoods = _selectedFoods
-          .map((item) => FoodSearchResult(
-                id:
-                    'recent_${item.result.name.toLowerCase().replaceAll(RegExp(r'\\s+'), '_')}',
-                name: item.result.name,
-                subtitle: 'Recently logged',
-                caloriesPer100g: item.result.caloriesPer100g,
-                proteinPer100g: item.result.proteinPer100g,
-                carbsPer100g: item.result.carbsPer100g,
-                fatPer100g: item.result.fatPer100g,
-                defaultQuantity: item.quantity,
-                quantityUnit: item.quantityUnit,
-                source: item.result.source,
-                groupKey: 'recent',
-                servingOptions: [
-                  FoodServingOption(
-                    label: item.servingLabel ?? 'Last used',
-                    quantity: item.quantity,
-                    unit: item.quantityUnit,
-                  ),
-                  FoodServingOption(label: '100 g', quantity: 100, unit: 'g'),
-                ],
-                matchScore: 100,
-              ))
+          .map(
+            (item) => FoodSearchResult(
+              id: 'recent_${item.result.name.toLowerCase().replaceAll(RegExp(r'\\s+'), '_')}',
+              name: item.result.name,
+              subtitle: 'Recently logged',
+              caloriesPer100g: item.result.caloriesPer100g,
+              proteinPer100g: item.result.proteinPer100g,
+              carbsPer100g: item.result.carbsPer100g,
+              fatPer100g: item.result.fatPer100g,
+              defaultQuantity: item.quantity,
+              quantityUnit: item.quantityUnit,
+              source: item.result.source,
+              groupKey: 'recent',
+              servingOptions: [
+                FoodServingOption(
+                  label: item.servingLabel ?? 'Last used',
+                  quantity: item.quantity,
+                  unit: item.quantityUnit,
+                ),
+                FoodServingOption(label: '100 g', quantity: 100, unit: 'g'),
+              ],
+              matchScore: 100,
+            ),
+          )
           .toList();
 
       setState(() {
@@ -845,7 +866,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
 
   void _handleFirebaseError(FirebaseException e, String fallbackMessage) {
     String message = fallbackMessage;
-    
+
     switch (e.code) {
       case 'permission-denied':
         message = 'You don\'t have permission to perform this action.';
@@ -868,13 +889,13 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       default:
         message = '$fallbackMessage: ${e.message}';
     }
-    
+
     _showError(message);
   }
 
   void _showError(String message) {
     if (!mounted) return;
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -910,7 +931,15 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }
 
   String _getWeekday(int weekday) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
     return days[weekday - 1];
   }
 
@@ -961,7 +990,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                 child: Text(
                   '${_selectedFoods.length} selected',
                   style: TextStyle(
-                color: Colors.white,
+                    color: Colors.white,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -973,15 +1002,14 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         children: [
           // Search Bar Section
           _buildSearchSection(),
-          
+
           // Main Content
-          Expanded(
-            child: _buildMainContent(),
-          ),
+          Expanded(child: _buildMainContent()),
         ],
       ),
-      bottomNavigationBar:
-          _selectedFoods.isNotEmpty ? _buildBottomSummary() : null,
+      bottomNavigationBar: _selectedFoods.isNotEmpty
+          ? _buildBottomSummary()
+          : null,
     );
   }
 
@@ -1031,7 +1059,11 @@ class _SearchFoodPageState extends State<SearchFoodPage>
               child: Row(
                 children: [
                   _buildQuickFilter('Recent', Icons.history, 'recent'),
-                  _buildQuickFilter('My Foods', Icons.favorite_border, 'myFoods'),
+                  _buildQuickFilter(
+                    'My Foods',
+                    Icons.favorite_border,
+                    'myFoods',
+                  ),
                 ],
               ),
             ),
@@ -1146,19 +1178,13 @@ class _SearchFoodPageState extends State<SearchFoodPage>
             Text(
               _errorMessage!,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[700],
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.grey[700]),
             ),
             const SizedBox(height: 12),
             Text(
               'Update the search text and the page will refresh automatically.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
             ),
           ],
         ),
@@ -1187,10 +1213,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
             Text(
               'Try searching for something else or check your spelling',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
             ),
             const SizedBox(height: 24),
             TextButton.icon(
@@ -1219,9 +1242,13 @@ class _SearchFoodPageState extends State<SearchFoodPage>
           _buildSectionHeader('Recent Manual Foods'),
           const SizedBox(height: 8),
           if (_recentFoods.isEmpty)
-            _buildInlineEmpty('No manual foods yet. Add foods manually to see them here.')
+            _buildInlineEmpty(
+              'No manual foods yet. Add foods manually to see them here.',
+            )
           else
-            ..._recentFoods.map((food) => _buildFoodListTile(food, isRecent: true)),
+            ..._recentFoods.map(
+              (food) => _buildFoodListTile(food, isRecent: true),
+            ),
         ] else ...[
           _buildSectionHeader('My Foods (Favorites)'),
           const SizedBox(height: 8),
@@ -1239,7 +1266,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
       padding: const EdgeInsets.all(16),
       children: [
         _buildSectionHeader(
-          _browseTab == 'recent' ? 'Recent Manual Foods' : 'My Foods (Favorites)',
+          _browseTab == 'recent'
+              ? 'Recent Manual Foods'
+              : 'My Foods (Favorites)',
         ),
         const SizedBox(height: 8),
         Shimmer.fromColors(
@@ -1368,17 +1397,19 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }
 
   Widget _buildFoodListTile(FoodSearchResult result, {bool isRecent = false}) {
-    final isSelected = _selectedFoods.any((item) => item.result.name == result.name);
-    
+    final isSelected = _selectedFoods.any(
+      (item) => item.result.name == result.name,
+    );
+
     return InkWell(
       onTap: () => _showFoodDetail(result),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.green.withOpacity(0.05) : Colors.transparent,
-          border: Border(
-            bottom: BorderSide(color: Colors.grey[200]!),
-          ),
+          color: isSelected
+              ? Colors.green.withOpacity(0.05)
+              : Colors.transparent,
+          border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
         ),
         child: Row(
           children: [
@@ -1393,7 +1424,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
               child: const Icon(Icons.restaurant, color: Colors.grey),
             ),
             const SizedBox(width: 12),
-            
+
             // Food Info
             Expanded(
               child: Column(
@@ -1412,10 +1443,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                   const SizedBox(height: 2),
                   Text(
                     result.subtitle,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1441,7 +1469,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                 ],
               ),
             ),
-            
+
             Column(
               children: [
                 IconButton(
@@ -1461,7 +1489,11 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                       color: Colors.green,
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.check, color: Colors.white, size: 16),
+                    child: const Icon(
+                      Icons.check,
+                      color: Colors.white,
+                      size: 16,
+                    ),
                   ),
               ],
             ),
@@ -1490,10 +1522,22 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }
 
   Widget _buildBottomSummary() {
-    final mealCalories = _selectedFoods.fold<double>(0, (sum, item) => sum + item.calories);
-    final mealCarbs = _selectedFoods.fold<double>(0, (sum, item) => sum + item.carbs);
-    final mealProtein = _selectedFoods.fold<double>(0, (sum, item) => sum + item.protein);
-    final mealFat = _selectedFoods.fold<double>(0, (sum, item) => sum + item.fat);
+    final mealCalories = _selectedFoods.fold<double>(
+      0,
+      (sum, item) => sum + item.calories,
+    );
+    final mealCarbs = _selectedFoods.fold<double>(
+      0,
+      (sum, item) => sum + item.carbs,
+    );
+    final mealProtein = _selectedFoods.fold<double>(
+      0,
+      (sum, item) => sum + item.protein,
+    );
+    final mealFat = _selectedFoods.fold<double>(
+      0,
+      (sum, item) => sum + item.fat,
+    );
     final maxExpandedSummaryHeight = MediaQuery.of(context).size.height * 0.42;
 
     return SafeArea(
@@ -1538,11 +1582,16 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                       decoration: BoxDecoration(
                         color: const Color(0xFFF4F8F1),
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.green.withOpacity(0.18)),
+                        border: Border.all(
+                          color: Colors.green.withOpacity(0.18),
+                        ),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.insights_outlined, color: Colors.green),
+                          const Icon(
+                            Icons.insights_outlined,
+                            color: Colors.green,
+                          ),
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
@@ -1575,7 +1624,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                       ? CrossFadeState.showFirst
                       : CrossFadeState.showSecond,
                   firstChild: ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: maxExpandedSummaryHeight),
+                    constraints: BoxConstraints(
+                      maxHeight: maxExpandedSummaryHeight,
+                    ),
                     child: SingleChildScrollView(
                       child: Column(
                         children: [
@@ -1634,7 +1685,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       IconButton(
-                                        icon: const Icon(Icons.edit_outlined, size: 18),
+                                        icon: const Icon(
+                                          Icons.edit_outlined,
+                                          size: 18,
+                                        ),
                                         onPressed: () => _showEditDialog(index),
                                       ),
                                       IconButton(
@@ -1734,10 +1788,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
             Container(
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
               decoration: BoxDecoration(
-                color: remaining >= 0 ? Colors.green.withOpacity(0.05) : Colors.red.withOpacity(0.05),
-                border: Border(
-                  bottom: BorderSide(color: Colors.grey[200]!),
-                ),
+                color: remaining >= 0
+                    ? Colors.green.withOpacity(0.05)
+                    : Colors.red.withOpacity(0.05),
+                border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1775,13 +1829,18 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                       ),
                       const Spacer(),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: remaining >= 0 ? Colors.green : Colors.red,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          remaining >= 0 ? '$remaining left' : '${remaining.abs()} over',
+                          remaining >= 0
+                              ? '$remaining left'
+                              : '${remaining.abs()} over',
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w700,
@@ -1794,7 +1853,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                 ],
               ),
             ),
-             
+
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
               child: Wrap(
@@ -1880,7 +1939,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
   }
 
   String _joinFoodNames(List<String> names) {
-    final filtered = names.map((name) => name.trim()).where((name) => name.isNotEmpty).toList();
+    final filtered = names
+        .map((name) => name.trim())
+        .where((name) => name.isNotEmpty)
+        .toList();
     if (filtered.isEmpty) return 'Manual meal';
     if (filtered.length == 1) return filtered.first;
     if (filtered.length == 2) return '${filtered[0]} and ${filtered[1]}';
@@ -1904,7 +1966,11 @@ class _SearchFoodPageState extends State<SearchFoodPage>
         children: [
           Text(
             label,
-            style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 6),
           SizedBox(
@@ -2007,10 +2073,7 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                     const SizedBox(height: 6),
                     Text(
                       'Adjust quantity before saving this meal',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 18),
                     Container(
@@ -2034,9 +2097,10 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                               controller: controller,
                               autofocus: true,
                               textAlign: TextAlign.center,
-                              keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
                               decoration: InputDecoration(
                                 labelText: 'Quantity',
                                 suffixText: item.quantityUnit,
@@ -2071,7 +2135,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                         Expanded(
                           child: _quickQuantityChip(
                             label: 'Half',
-                            onTap: () => syncQuantity((item.quantity / 2).clamp(1, double.infinity)),
+                            onTap: () => syncQuantity(
+                              (item.quantity / 2).clamp(1, double.infinity),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -2112,7 +2178,9 @@ class _SearchFoodPageState extends State<SearchFoodPage>
                               final value = double.tryParse(controller.text);
                               Navigator.pop(
                                 context,
-                                value != null && value > 0 ? value : draftQuantity,
+                                value != null && value > 0
+                                    ? value
+                                    : draftQuantity,
                               );
                             },
                             style: FilledButton.styleFrom(
@@ -2273,7 +2341,7 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
   late String _quantityUnit;
   FoodServingOption? _selectedServing;
   int _numberOfServings = 1;
-  
+
   final TextEditingController _quantityController = TextEditingController();
 
   @override
@@ -2288,15 +2356,19 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
       _quantity = _selectedServing!.quantity;
       _quantityUnit = _selectedServing!.unit;
     } else {
-      _quantity = widget.result.defaultQuantity > 0 ? widget.result.defaultQuantity : 100;
+      _quantity = widget.result.defaultQuantity > 0
+          ? widget.result.defaultQuantity
+          : 100;
       _quantityUnit = widget.result.quantityUnit;
     }
   }
 
   double get _factor => _quantity / 100.0;
-  double get _calories => widget.result.caloriesPer100g * _factor * _numberOfServings;
+  double get _calories =>
+      widget.result.caloriesPer100g * _factor * _numberOfServings;
   double get _carbs => widget.result.carbsPer100g * _factor * _numberOfServings;
-  double get _protein => widget.result.proteinPer100g * _factor * _numberOfServings;
+  double get _protein =>
+      widget.result.proteinPer100g * _factor * _numberOfServings;
   double get _fat => widget.result.fatPer100g * _factor * _numberOfServings;
 
   void _addFood() {
@@ -2306,7 +2378,7 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
       quantityUnit: _quantityUnit,
       servingLabel: _selectedServing?.label,
     );
-    
+
     Navigator.of(context).pop(item);
   }
 
@@ -2324,7 +2396,10 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
             onPressed: _addFood,
             child: const Text(
               'ADD',
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
           ),
         ],
@@ -2334,16 +2409,16 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
           children: [
             // Food Header Card
             _buildFoodHeader(),
-            
+
             // Serving Size Selector
             _buildServingSection(),
-            
+
             // Number of Servings
             _buildServingsCountSection(),
-            
+
             // Nutrition Facts
             _buildNutritionSection(),
-            
+
             const SizedBox(height: 32),
           ],
         ),
@@ -2369,7 +2444,11 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
                   color: Colors.green.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.restaurant, size: 40, color: Colors.green),
+                child: const Icon(
+                  Icons.restaurant,
+                  size: 40,
+                  color: Colors.green,
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -2386,14 +2465,14 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
                     const SizedBox(height: 4),
                     Text(
                       widget.result.subtitle,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.green.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(6),
@@ -2427,13 +2506,10 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
         children: [
           const Text(
             'Serving Size',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 16),
-          
+
           if (widget.result.servingOptions.isNotEmpty) ...[
             Wrap(
               spacing: 8,
@@ -2452,23 +2528,30 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
                       });
                     }
                   },
-                  selectedColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                  selectedColor: Theme.of(
+                    context,
+                  ).primaryColor.withOpacity(0.1),
                   labelStyle: TextStyle(
-                    color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    color: isSelected
+                        ? Theme.of(context).primaryColor
+                        : Colors.black87,
+                    fontWeight: isSelected
+                        ? FontWeight.w600
+                        : FontWeight.normal,
                   ),
                 );
               }).toList(),
             ),
             const SizedBox(height: 16),
           ],
-          
+
           // Custom Quantity Input
           Row(
             children: [
               Expanded(
                 child: TextField(
-                  controller: _quantityController..text = _quantity.toStringAsFixed(0),
+                  controller: _quantityController
+                    ..text = _quantity.toStringAsFixed(0),
                   keyboardType: TextInputType.number,
                   decoration: InputDecoration(
                     labelText: 'Quantity',
@@ -2524,10 +2607,7 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
         children: [
           const Text(
             'Number of Servings',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 16),
           Row(
@@ -2540,7 +2620,10 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
                     : null,
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.grey[100],
                   borderRadius: BorderRadius.circular(8),
@@ -2577,27 +2660,30 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
             children: [
               const Text(
                 'Nutrition Facts',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
               ),
               Text(
                 'Per $_quantity $_quantityUnit',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          _buildNutritionRow('Calories', _calories, 'kcal', Colors.orange, isBold: true),
+          _buildNutritionRow(
+            'Calories',
+            _calories,
+            'kcal',
+            Colors.orange,
+            isBold: true,
+          ),
           const Divider(height: 32),
           _buildNutritionRow('Total Carbs', _carbs, 'g', Colors.blue),
           const Padding(
             padding: EdgeInsets.only(left: 16, top: 8),
-            child: Text('Includes sugars and fiber', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            child: Text(
+              'Includes sugars and fiber',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
           ),
           const Divider(height: 32),
           _buildNutritionRow('Protein', _protein, 'g', Colors.red),
@@ -2608,7 +2694,13 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
     );
   }
 
-  Widget _buildNutritionRow(String label, double value, String unit, Color color, {bool isBold = false}) {
+  Widget _buildNutritionRow(
+    String label,
+    double value,
+    String unit,
+    Color color, {
+    bool isBold = false,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -2617,10 +2709,7 @@ class _FoodDetailPageState extends State<FoodDetailPage> {
             Container(
               width: 12,
               height: 12,
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 12),
             Text(
@@ -2720,17 +2809,11 @@ class MacroProgressBar extends StatelessWidget {
           children: [
             Text(
               label,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
             Text(
               '$current / $target g',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],
         ),
@@ -2747,10 +2830,7 @@ class MacroProgressBar extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           '$percentage% of daily goal',
-          style: TextStyle(
-            fontSize: 11,
-            color: Colors.grey[500],
-          ),
+          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
         ),
       ],
     );
