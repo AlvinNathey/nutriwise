@@ -1,50 +1,10 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:nutriwise/food/kenyan_food_catalog.dart';
+import 'package:nutriwise/food/food_search_models.dart';
 
-class FoodServingOption {
-  final String label;
-  final double quantity;
-  final String unit;
-
-  const FoodServingOption({
-    required this.label,
-    required this.quantity,
-    required this.unit,
-  });
-}
-
-class FoodSearchResult {
-  final String id;
-  final String name;
-  final String subtitle;
-  final double caloriesPer100g;
-  final double carbsPer100g;
-  final double proteinPer100g;
-  final double fatPer100g;
-  final double defaultQuantity;
-  final String quantityUnit;
-  final String source;
-  final String groupKey;
-  final List<FoodServingOption> servingOptions;
-  final int matchScore;
-
-  const FoodSearchResult({
-    required this.id,
-    required this.name,
-    required this.subtitle,
-    required this.caloriesPer100g,
-    required this.carbsPer100g,
-    required this.proteinPer100g,
-    required this.fatPer100g,
-    required this.defaultQuantity,
-    required this.quantityUnit,
-    required this.source,
-    required this.groupKey,
-    required this.servingOptions,
-    required this.matchScore,
-  });
-}
+export 'food_search_models.dart';
 
 class FoodSearchService {
   FoodSearchService._();
@@ -56,12 +16,14 @@ class FoodSearchService {
     final trimmedQuery = query.trim();
     if (trimmedQuery.isEmpty) return [];
 
+    final localResults = _searchKenyanFoods(trimmedQuery);
     final futures = await Future.wait([
       _searchUsda(trimmedQuery),
       _searchOpenFoodFacts(trimmedQuery),
     ]);
 
     final all = <FoodSearchResult>[
+      ...localResults,
       ...futures[0],
       ...futures[1],
     ];
@@ -86,6 +48,41 @@ class FoodSearchService {
       });
 
     return results.take(35).toList();
+  }
+
+  static List<FoodSearchResult> _searchKenyanFoods(String query) {
+    final results = <FoodSearchResult>[];
+
+    for (final entry in KenyanFoodCatalog.entries) {
+      final score = _computeKenyanCatalogScore(
+        query,
+        entry.result.name,
+        entry.result.subtitle,
+        entry.aliases,
+      );
+      if (score <= 0) continue;
+
+      results.add(
+        FoodSearchResult(
+          id: entry.result.id,
+          name: entry.result.name,
+          subtitle: entry.result.subtitle,
+          caloriesPer100g: entry.result.caloriesPer100g,
+          carbsPer100g: entry.result.carbsPer100g,
+          proteinPer100g: entry.result.proteinPer100g,
+          fatPer100g: entry.result.fatPer100g,
+          defaultQuantity: entry.result.defaultQuantity,
+          quantityUnit: entry.result.quantityUnit,
+          source: entry.result.source,
+          groupKey: entry.result.groupKey,
+          servingOptions: entry.result.servingOptions,
+          matchScore: score,
+        ),
+      );
+    }
+
+    results.sort((a, b) => b.matchScore.compareTo(a.matchScore));
+    return results.take(20).toList();
   }
 
   static Future<List<FoodSearchResult>> _searchOpenFoodFacts(String query) async {
@@ -241,6 +238,8 @@ class FoodSearchService {
 
   static int _sourcePriority(String source) {
     switch (source) {
+      case 'Kenya FCT 2018':
+        return -1;
       case 'USDA':
         return 0;
       case 'Open Food Facts':
@@ -250,6 +249,45 @@ class FoodSearchService {
       default:
         return 3;
     }
+  }
+
+  static int _computeKenyanCatalogScore(
+    String query,
+    String name,
+    String subtitle,
+    List<String> aliases,
+  ) {
+    final q = _normalize(query);
+    if (q.isEmpty) return 0;
+
+    final candidates = <String>[name, subtitle, ...aliases];
+    var bestScore = 0;
+
+    for (final candidate in candidates) {
+      final current = _computeCandidateScore(q, _normalize(candidate));
+      if (current > bestScore) bestScore = current;
+    }
+
+    return bestScore;
+  }
+
+  static int _computeCandidateScore(String query, String candidate) {
+    if (candidate.isEmpty) return 0;
+    if (candidate == query) return 160;
+    if (candidate.startsWith(query)) return 145;
+    if (candidate.contains(query)) return 130;
+
+    final queryParts = query.split(' ').where((part) => part.isNotEmpty).toList();
+    if (queryParts.isEmpty) return 0;
+
+    final allPartsMatch = queryParts.every(candidate.contains);
+    if (allPartsMatch) return 118;
+
+    final queryNoSpaces = query.replaceAll(' ', '');
+    final candidateNoSpaces = candidate.replaceAll(' ', '');
+    if (candidateNoSpaces.contains(queryNoSpaces)) return 110;
+
+    return 0;
   }
 
   static double? _parseNumber(dynamic value) {

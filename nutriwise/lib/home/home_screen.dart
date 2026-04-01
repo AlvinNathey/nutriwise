@@ -1068,27 +1068,62 @@ class _HomeScreenState extends State<HomeScreen> {
                                       mainAxisAlignment:
                                           MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Daily Goal',
-                                              style: TextStyle(
-                                                fontSize: 15,
-                                                color: Colors.grey[600],
-                                                fontWeight: FontWeight.w500,
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Daily Goal',
+                                                style: TextStyle(
+                                                  fontSize: 15,
+                                                  color: Colors.grey[600],
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
-                                            ),
-                                            Text(
-                                              '$dailyGoal cal',
-                                              style: const TextStyle(
-                                                fontSize: 15,
-                                                color: Colors.red,
-                                                fontWeight: FontWeight.w600,
+                                              Text(
+                                                '$dailyGoal cal',
+                                                style: const TextStyle(
+                                                  fontSize: 15,
+                                                  color: Colors.red,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            children: [
+                                              Text(
+                                                'Calories Eaten',
+                                                style: TextStyle(
+                                                  fontSize: 15,
+                                                  color: Colors.grey[600],
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                                textAlign: TextAlign.right,
+                                              ),
+                                              Text(
+                                                '$caloriesConsumed cal',
+                                                style: TextStyle(
+                                                  fontSize: 15,
+                                                  color: caloriesGoalMet
+                                                      ? Colors.green
+                                                      : const Color.fromARGB(
+                                                          255,
+                                                          47,
+                                                          222,
+                                                          38,
+                                                        ),
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                                textAlign: TextAlign.right,
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ],
                                     ),
