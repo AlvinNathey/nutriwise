@@ -11,6 +11,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import 'package:nutriwise/services/food_collections.dart';
+import 'package:shimmer/shimmer.dart';
 
 // Color mapping for meal types
 const Map<String, Color> mealTypeColors = {
@@ -33,6 +34,8 @@ class _RecordsPageState extends State<RecordsPage>
   late TabController _tabController;
   DateTime _selectedMonth = DateTime.now();
   int _selectedTab = 0;
+  bool _isMonthLoading = false;
+  int _activeMonthRequest = 0;
 
   // Track user's account creation date
   DateTime? _accountCreated;
@@ -76,22 +79,55 @@ class _RecordsPageState extends State<RecordsPage>
         .doc(user.uid)
         .get();
     final createdAt = userDoc.data()?['createdAt'];
-    if (createdAt != null && createdAt is Timestamp) {
-      setState(() {
-        _accountCreated = createdAt.toDate();
-      });
-    } else {
-      setState(() {
-        _accountCreated = DateTime.now();
-      });
-    }
+    final resolvedCreatedAt = _resolveAccountCreatedAt(
+      createdAt,
+      user.metadata.creationTime,
+    );
+    setState(() {
+      _accountCreated = resolvedCreatedAt;
+    });
 
     await _fetchMealsForMonth();
+  }
+
+  DateTime _resolveAccountCreatedAt(
+    dynamic createdAt,
+    DateTime? authCreationTime,
+  ) {
+    if (createdAt is Timestamp) {
+      return createdAt.toDate();
+    }
+    if (createdAt is DateTime) {
+      return createdAt;
+    }
+    if (createdAt is String) {
+      final parsed = DateTime.tryParse(createdAt);
+      if (parsed != null) return parsed;
+    }
+    if (createdAt is int) {
+      return DateTime.fromMillisecondsSinceEpoch(createdAt);
+    }
+    if (authCreationTime != null) {
+      return authCreationTime;
+    }
+    return DateTime.now();
+  }
+
+  DateTime? _minimumVisibleMonth() {
+    if (_accountCreated == null) return null;
+    return DateTime(_accountCreated!.year, _accountCreated!.month);
   }
 
   Future<void> _fetchMealsForMonth() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    final requestId = ++_activeMonthRequest;
+
+    if (mounted) {
+      setState(() {
+        _isMonthLoading = true;
+      });
+    }
 
     final year = _selectedMonth.year;
     final month = _selectedMonth.month;
@@ -108,118 +144,128 @@ class _RecordsPageState extends State<RecordsPage>
     };
     Map<int, Set<String>> dayMealTypes = {};
 
-    // --- Fetch from barcodes ---
-    final barcodeSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('barcodes')
-        .where(
-          'createdAt',
-          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
-        )
-        .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
-        .get();
+    try {
+      // --- Fetch from barcodes ---
+      final barcodeSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('barcodes')
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+          )
+          .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
+          .get();
 
-    final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
-        .where(
-          'createdAt',
-          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
-        )
-        .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
-        .get();
+      final manualFoodsSnapshot = await userManualFoodsCollection(user.uid)
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+          )
+          .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
+          .get();
 
-    for (var doc in barcodeSnapshot.docs) {
-      final data = doc.data();
-      final createdAt = data['createdAt'];
-      final calories = (data['calories'] ?? 0).round();
-      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+      for (var doc in barcodeSnapshot.docs) {
+        final data = doc.data();
+        final createdAt = data['createdAt'];
+        final calories = (data['calories'] ?? 0).round();
+        String mealType = (data['mealType'] ?? 'Meal').toString().trim();
 
-      if (mealType == 'Breakfast Snack' ||
-          mealType == 'Afternoon Snack' ||
-          mealType == 'Midnight Snack') {
-        mealType = 'Snack';
+        if (mealType == 'Breakfast Snack' ||
+            mealType == 'Afternoon Snack' ||
+            mealType == 'Midnight Snack') {
+          mealType = 'Snack';
+        }
+
+        if (createdAt is Timestamp) {
+          final date = createdAt.toDate();
+          final day = date.day;
+          calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
+          if (mealTypeCounts.containsKey(mealType)) {
+            mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+          }
+          dayMealTypes.putIfAbsent(day, () => <String>{});
+          dayMealTypes[day]!.add(mealType);
+        }
       }
 
-      if (createdAt is Timestamp) {
-        final date = createdAt.toDate();
-        final day = date.day;
-        calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
-        if (mealTypeCounts.containsKey(mealType)) {
-          mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+      for (var doc in manualFoodsSnapshot.docs) {
+        final data = doc.data();
+        final createdAt = data['createdAt'];
+        final calories = (data['calories'] ?? 0).round();
+        String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
+        if (mealType == 'Breakfast Snack' ||
+            mealType == 'Afternoon Snack' ||
+            mealType == 'Midnight Snack') {
+          mealType = 'Snack';
         }
-        dayMealTypes.putIfAbsent(day, () => <String>{});
-        dayMealTypes[day]!.add(mealType);
+
+        if (createdAt is Timestamp) {
+          final date = createdAt.toDate();
+          final day = date.day;
+          calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
+          if (mealTypeCounts.containsKey(mealType)) {
+            mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+          }
+          dayMealTypes.putIfAbsent(day, () => <String>{});
+          dayMealTypes[day]!.add(mealType);
+        }
+      }
+
+      // --- Fetch from meals ---
+      final mealsSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('meals')
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
+          )
+          .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
+          .get();
+
+      for (var doc in mealsSnapshot.docs) {
+        final data = doc.data();
+        final createdAt = data['createdAt'];
+        final calories = (data['totalCalories'] ?? 0).round();
+        String mealType = (data['mealType'] ?? 'Meal').toString().trim();
+
+        if (mealType == 'Breakfast Snack' ||
+            mealType == 'Afternoon Snack' ||
+            mealType == 'Midnight Snack') {
+          mealType = 'Snack';
+        }
+
+        if (createdAt is Timestamp) {
+          final date = createdAt.toDate();
+          final day = date.day;
+          calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
+          if (mealTypeCounts.containsKey(mealType)) {
+            mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
+          }
+          dayMealTypes.putIfAbsent(day, () => <String>{});
+          dayMealTypes[day]!.add(mealType);
+        }
+      }
+
+      if (!mounted || requestId != _activeMonthRequest) return;
+      setState(() {
+        _calorieData = calorieData;
+        _mealTypeCounts = mealTypeCounts;
+        _dayMealTypes = dayMealTypes;
+      });
+    } finally {
+      if (mounted && requestId == _activeMonthRequest) {
+        setState(() {
+          _isMonthLoading = false;
+        });
       }
     }
-
-    for (var doc in manualFoodsSnapshot.docs) {
-      final data = doc.data();
-      final createdAt = data['createdAt'];
-      final calories = (data['calories'] ?? 0).round();
-      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
-
-      if (mealType == 'Breakfast Snack' ||
-          mealType == 'Afternoon Snack' ||
-          mealType == 'Midnight Snack') {
-        mealType = 'Snack';
-      }
-
-      if (createdAt is Timestamp) {
-        final date = createdAt.toDate();
-        final day = date.day;
-        calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
-        if (mealTypeCounts.containsKey(mealType)) {
-          mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
-        }
-        dayMealTypes.putIfAbsent(day, () => <String>{});
-        dayMealTypes[day]!.add(mealType);
-      }
-    }
-
-    // --- Fetch from meals ---
-    final mealsSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('meals')
-        .where(
-          'createdAt',
-          isGreaterThanOrEqualTo: Timestamp.fromDate(startDate),
-        )
-        .where('createdAt', isLessThan: Timestamp.fromDate(endDate))
-        .get();
-
-    for (var doc in mealsSnapshot.docs) {
-      final data = doc.data();
-      final createdAt = data['createdAt'];
-      final calories = (data['totalCalories'] ?? 0).round();
-      String mealType = (data['mealType'] ?? 'Meal').toString().trim();
-
-      if (mealType == 'Breakfast Snack' ||
-          mealType == 'Afternoon Snack' ||
-          mealType == 'Midnight Snack') {
-        mealType = 'Snack';
-      }
-
-      if (createdAt is Timestamp) {
-        final date = createdAt.toDate();
-        final day = date.day;
-        calorieData[day] = ((calorieData[day] ?? 0) + calories).toInt();
-        if (mealTypeCounts.containsKey(mealType)) {
-          mealTypeCounts[mealType] = mealTypeCounts[mealType]! + 1;
-        }
-        dayMealTypes.putIfAbsent(day, () => <String>{});
-        dayMealTypes[day]!.add(mealType);
-      }
-    }
-
-    setState(() {
-      _calorieData = calorieData;
-      _mealTypeCounts = mealTypeCounts;
-      _dayMealTypes = dayMealTypes;
-    });
   }
 
   void _previousMonth() {
+    if (_isMonthLoading) return;
     setState(() {
       _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     });
@@ -227,9 +273,9 @@ class _RecordsPageState extends State<RecordsPage>
   }
 
   void _nextMonth() {
-    final now = DateTime.now();
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
-    if (nextMonth.isBefore(DateTime(now.year, now.month + 1))) {
+    if (_isMonthLoading) return;
+    if (_isCurrentOrPastMonth(nextMonth)) {
       setState(() {
         _selectedMonth = nextMonth;
       });
@@ -237,17 +283,28 @@ class _RecordsPageState extends State<RecordsPage>
     }
   }
 
-  bool _isFutureMonth() {
+  bool _isCurrentOrPastMonth(DateTime month) {
     final now = DateTime.now();
-    return _selectedMonth.year > now.year ||
-        (_selectedMonth.year == now.year && _selectedMonth.month > now.month);
+    return month.year < now.year ||
+        (month.year == now.year && month.month <= now.month);
   }
 
-  bool _isBeforeAccountCreated() {
-    if (_accountCreated == null) return false;
-    return _selectedMonth.year < _accountCreated!.year ||
-        (_selectedMonth.year == _accountCreated!.year &&
-            _selectedMonth.month < _accountCreated!.month);
+  bool _canGoToPreviousMonth() {
+    if (_isMonthLoading) return false;
+    final minimumMonth = _minimumVisibleMonth();
+    if (minimumMonth == null) return true;
+
+    final previousMonth = DateTime(
+      _selectedMonth.year,
+      _selectedMonth.month - 1,
+    );
+    return !previousMonth.isBefore(minimumMonth);
+  }
+
+  bool _canGoToNextMonth() {
+    if (_isMonthLoading) return false;
+    final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+    return _isCurrentOrPastMonth(nextMonth);
   }
 
   // New method to show download dialog
@@ -331,8 +388,8 @@ class _RecordsPageState extends State<RecordsPage>
           children: [
             IconButton(
               icon: const Icon(Icons.chevron_left),
-              onPressed: _isBeforeAccountCreated() ? null : _previousMonth,
-              color: _isBeforeAccountCreated() ? Colors.grey : Colors.black,
+              onPressed: _canGoToPreviousMonth() ? _previousMonth : null,
+              color: _canGoToPreviousMonth() ? Colors.black : Colors.grey,
             ),
             const SizedBox(width: 20),
             Text(
@@ -343,15 +400,19 @@ class _RecordsPageState extends State<RecordsPage>
             IconButton(
               icon: Icon(
                 Icons.chevron_right,
-                color: _isFutureMonth() ? Colors.grey : Colors.black,
+                color: _canGoToNextMonth() ? Colors.black : Colors.grey,
               ),
-              onPressed: _isFutureMonth() ? null : _nextMonth,
+              onPressed: _canGoToNextMonth() ? _nextMonth : null,
             ),
           ],
         ),
         const SizedBox(height: 16),
+        if (_isMonthLoading) ...[
+          _buildMealCounterShimmer(),
+          const SizedBox(height: 30),
+        ],
         // Show counters only if there is data
-        if (hasData)
+        if (!_isMonthLoading && hasData)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -377,9 +438,9 @@ class _RecordsPageState extends State<RecordsPage>
               ),
             ],
           ),
-        if (hasData) const SizedBox(height: 30),
+        if (!_isMonthLoading && hasData) const SizedBox(height: 30),
         // Show note if no data for this month
-        if (!hasData)
+        if (!_isMonthLoading && !hasData)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0),
             child: Text(
@@ -389,9 +450,35 @@ class _RecordsPageState extends State<RecordsPage>
           ),
         // Calendar (always show, even if no data)
         Expanded(
-          child: _buildCalendarWithCalories(hasData ? _calorieData : {}),
+          child: _isMonthLoading
+              ? _buildCalendarShimmer()
+              : _buildCalendarWithCalories(hasData ? _calorieData : {}),
         ),
       ],
+    );
+  }
+
+  Widget _buildMealCounterShimmer() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: List.generate(
+        4,
+        (_) => Column(
+          children: [
+            _buildShimmerBox(
+              width: 60,
+              height: 60,
+              borderRadius: BorderRadius.circular(30),
+            ),
+            const SizedBox(height: 8),
+            _buildShimmerBox(
+              width: 54,
+              height: 14,
+              borderRadius: BorderRadius.circular(7),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -575,6 +662,69 @@ class _RecordsPageState extends State<RecordsPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCalendarShimmer() {
+    return Container(
+      color: Colors.grey[100],
+      padding: const EdgeInsets.all(8),
+      child: Column(
+        children: [
+          Row(
+            children: List.generate(
+              7,
+              (_) => Expanded(
+                child: Center(
+                  child: _buildShimmerBox(
+                    width: 26,
+                    height: 12,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: GridView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7,
+                childAspectRatio: 0.8,
+              ),
+              itemCount: 42,
+              itemBuilder: (context, index) => Padding(
+                padding: const EdgeInsets.all(2),
+                child: _buildShimmerBox(
+                  width: double.infinity,
+                  height: double.infinity,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShimmerBox({
+    required double width,
+    required double height,
+    required BorderRadius borderRadius,
+  }) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey.shade300,
+      highlightColor: Colors.grey.shade100,
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: borderRadius,
+        ),
       ),
     );
   }
