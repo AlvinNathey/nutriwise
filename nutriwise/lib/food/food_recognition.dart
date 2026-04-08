@@ -2837,7 +2837,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           ],
         ),
       ),
-    );
+      );
   }
 
   /// IMPROVED: Better coordinate scaling from segmentation to display with validation
@@ -3389,15 +3389,6 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                       color: Colors.black87,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Swipe up on a food to delete',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
                 ],
               ),
               // Merge action button
@@ -3527,215 +3518,157 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       );
     }
 
-    return Dismissible(
-      key: Key(food.id),
-      direction: DismissDirection.up,
-      background: Container(
+    return GestureDetector(
+      onTap: () {
+        _showEditFoodDialog(food, index);
+      },
+      child: Container(
+        width: 140,
+        margin: const EdgeInsets.only(right: 12),
         decoration: BoxDecoration(
-          color: Colors.red,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-        ),
-        alignment: Alignment.center,
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.delete, color: Colors.white, size: 32),
-            SizedBox(height: 8),
-            Text(
-              'Swipe up to delete',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
+          border: Border.all(color: Colors.green[200]!),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
-      ),
-      confirmDismiss: (direction) async {
-        // Show confirmation dialog
-        return await showDialog<bool>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Remove Food'),
-                content: Text(
-                  'Are you sure you want to remove "${food.foodName ?? 'this food'}"?',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    topRight: Radius.circular(12),
+                  ),
+                  child: foodImage,
                 ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('Cancel'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                    ),
-                    child: const Text('Remove'),
-                  ),
-                ],
-              ),
-            ) ??
-            false;
-      },
-      onDismissed: (direction) {
-        setState(() {
-          _segmentedFoods.removeAt(index);
-        });
-        _updateAnimations();
-      },
-      child: GestureDetector(
-        onTap: () {
-          _showEditFoodDialog(food, index);
-        },
-        child: Container(
-          width: 140,
-          margin: const EdgeInsets.only(right: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.green[200]!),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.withOpacity(0.1),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      topRight: Radius.circular(12),
-                    ),
-                    child: foodImage,
-                  ),
-                  // Action buttons (Edit Nutrition and Remove)
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Edit Nutrition button
-                        GestureDetector(
-                          onTap: () {
-                            _showEditNutritionDialog(food, index);
-                          },
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            margin: const EdgeInsets.only(right: 4),
-                            decoration: const BoxDecoration(
-                              color: Colors.blue,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.edit,
-                              color: Colors.white,
-                              size: 16,
-                            ),
-                          ),
-                        ),
-                        // Remove button
-                        GestureDetector(
-                          onTap: () {
-                            _removeFood(index);
-                          },
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: const BoxDecoration(
-                              color: Colors.black54,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (!isSourceAdded)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.9),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '${(food.confidence * 100).toInt()}%',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // Action buttons (Edit Nutrition and Remove)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        food.foodName ?? 'Unknown',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black,
+                      // Edit Nutrition button
+                      GestureDetector(
+                        onTap: () {
+                          _showEditNutritionDialog(food, index);
+                        },
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          margin: const EdgeInsets.only(right: 4),
+                          decoration: const BoxDecoration(
+                            color: Colors.blue,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.edit,
+                            color: Colors.white,
+                            size: 16,
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
-                        '${food.gramsAmount}g',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                      ),
-                      Text(
-                        sourceLabel,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: isSourceAdded
-                              ? Colors.blueGrey[700]
-                              : Colors.grey[500],
-                          fontWeight: FontWeight.w500,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        '$displayCalories kcal',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.green[700],
-                          fontWeight: FontWeight.w600,
+                      // Remove button
+                      GestureDetector(
+                        onTap: () {
+                          _removeFood(index);
+                        },
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
+                if (!isSourceAdded)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${(food.confidence * 100).toInt()}%',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      food.foodName ?? 'Unknown',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '${food.gramsAmount}g',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                    Text(
+                      sourceLabel,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: isSourceAdded
+                            ? Colors.blueGrey[700]
+                            : Colors.grey[500],
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '$displayCalories kcal',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.green[700],
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
