@@ -1159,6 +1159,19 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       });
 
       if (_segmentedFoods.isEmpty) {
+        // Check if this might be a non-food image
+        final avgPixelValue = _calculateAveragePixelValue(_originalImage);
+        final isLikelyNonFood = _isLikelyNonFoodImage(avgPixelValue);
+
+        if (isLikelyNonFood) {
+          print('No food detected - image appears to be non-food');
+          setState(() {
+            _errorMessage = 'No food detected. Please upload an image containing food.';
+            _isProcessing = false;
+          });
+          return; // Don't create fallback for clearly non-food images
+        }
+
         print('No foods detected, creating fallback segment');
         _createFallbackSegment();
       } else {
@@ -1408,6 +1421,90 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       ),
       gramsAmount: foods.fold<int>(0, (sum, f) => sum + f.gramsAmount),
     );
+  }
+
+  /// Calculate average pixel brightness of the image
+  /// Used to detect if image might be non-food (e.g., all white, all black, uniform color)
+  double _calculateAveragePixelValue(img.Image? image) {
+    if (image == null) return 128.0;
+
+    int totalR = 0, totalG = 0, totalB = 0;
+    int pixelCount = 0;
+
+    // Sample every 10th pixel for performance
+    for (int y = 0; y < image.height; y += 10) {
+      for (int x = 0; x < image.width; x += 10) {
+        final pixel = image.getPixel(x, y);
+        totalR += pixel.r.toInt();
+        totalG += pixel.g.toInt();
+        totalB += pixel.b.toInt();
+        pixelCount++;
+      }
+    }
+
+    if (pixelCount == 0) return 128.0;
+
+    final avgR = totalR / pixelCount;
+    final avgG = totalG / pixelCount;
+    final avgB = totalB / pixelCount;
+
+    // Return average brightness (0-255)
+    return (avgR + avgG + avgB) / 3;
+  }
+
+  /// Detect if image is likely non-food based on pixel analysis
+  /// Returns true if image appears to be: blank white, blank black, uniform color, or document-like
+  bool _isLikelyNonFoodImage(double avgPixelValue) {
+    // Very bright image (likely blank white paper/screen)
+    if (avgPixelValue > 240) return true;
+
+    // Very dark image (likely black screen, dark room)
+    if (avgPixelValue < 15) return true;
+
+    // Additional check: if original image exists, check color variance
+    if (_originalImage != null) {
+      final variance = _calculateColorVariance(_originalImage!);
+      // Very low variance = uniform color (blank wall, sky, etc.)
+      if (variance < 50) return true;
+    }
+
+    return false;
+  }
+
+  /// Calculate color variance to detect uniform images
+  double _calculateColorVariance(img.Image image) {
+    int totalR = 0, totalG = 0, totalB = 0;
+    int pixelCount = 0;
+
+    // Sample pixels
+    for (int y = 0; y < image.height; y += 20) {
+      for (int x = 0; x < image.width; x += 20) {
+        final pixel = image.getPixel(x, y);
+        totalR += pixel.r.toInt();
+        totalG += pixel.g.toInt();
+        totalB += pixel.b.toInt();
+        pixelCount++;
+      }
+    }
+
+    if (pixelCount == 0) return 0;
+
+    final meanR = totalR / pixelCount;
+    final meanG = totalG / pixelCount;
+    final meanB = totalB / pixelCount;
+
+    // Calculate variance
+    double varianceSum = 0;
+    for (int y = 0; y < image.height; y += 20) {
+      for (int x = 0; x < image.width; x += 20) {
+        final pixel = image.getPixel(x, y);
+        varianceSum += math.pow(pixel.r.toInt() - meanR, 2);
+        varianceSum += math.pow(pixel.g.toInt() - meanG, 2);
+        varianceSum += math.pow(pixel.b.toInt() - meanB, 2);
+      }
+    }
+
+    return varianceSum / (pixelCount * 3);
   }
 
   // Continue to batch 3...
@@ -2820,15 +2917,17 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                               height: double.infinity,
                             ),
                           ),
-                        // Real-time detection overlay
-                        StreamBuilder<List<SegmentedFood>>(
-                          stream: detectionStream,
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              return _buildDetectionOverlay(snapshot.data!);
-                            }
-                            return Container();
-                          },
+                        // Real-time detection overlay - centered to match image
+                        Center(
+                          child: StreamBuilder<List<SegmentedFood>>(
+                            stream: detectionStream,
+                            builder: (context, snapshot) {
+                              if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                                return _buildDetectionOverlay(snapshot.data!);
+                              }
+                              return Container();
+                            },
+                          ),
                         ),
                         // Subtle gradient overlay for depth
                         Container(
@@ -2934,46 +3033,62 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
   }
 
-  /// Draw bounding boxes for detected regions
+  /// FIXED: Draw bounding boxes for detected regions - now properly aligns with BoxFit.contain
+  /// The overlay is constrained to the image card area with proper padding
   Widget _buildDetectionOverlay(List<SegmentedFood> foods) {
     if (_originalImage == null || _imageFile == null) {
       return Container();
     }
 
-    final displayHeight = MediaQuery.of(context).size.height;
-    final displayWidth = MediaQuery.of(context).size.width;
+    // Get the card dimensions (matches the image container in _buildProcessingPreview)
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cardPadding = 20.0; // Horizontal padding from _buildProcessingPreview
+    final cardWidth = screenWidth - (cardPadding * 2);
+
+    // Calculate card height (flex: 3 from processing preview, approx 45% of screen)
+    final screenHeight = MediaQuery.of(context).size.height;
+    final availableHeight = screenHeight * 0.45; // Approximate flex: 3 area
+    final cardHeight = availableHeight - 24; // Subtract vertical padding
+
     final originalWidth = _originalImage!.width.toDouble();
     final originalHeight = _originalImage!.height.toDouble();
 
-    // Calculate display aspect ratio vs original aspect ratio
-    final displayAspect = displayWidth / displayHeight;
+    // Calculate BoxFit.contain scaling (image centered within card)
     final originalAspect = originalWidth / originalHeight;
+    final cardAspect = cardWidth / cardHeight;
 
-    // Calculate actual rendered image dimensions (considering BoxFit.cover)
     double renderedWidth, renderedHeight;
     double offsetX = 0, offsetY = 0;
 
-    if (originalAspect > displayAspect) {
-      renderedHeight = displayHeight;
-      renderedWidth = displayHeight * originalAspect;
-      offsetX = -(renderedWidth - displayWidth) / 2;
+    if (originalAspect > cardAspect) {
+      // Image is wider - fit to width, letterbox vertically
+      renderedWidth = cardWidth;
+      renderedHeight = cardWidth / originalAspect;
+      offsetX = 0;
+      offsetY = (cardHeight - renderedHeight) / 2;
     } else {
-      renderedWidth = displayWidth;
-      renderedHeight = displayWidth / originalAspect;
-      offsetY = -(renderedHeight - displayHeight) / 2;
+      // Image is taller - fit to height, letterbox horizontally
+      renderedHeight = cardHeight;
+      renderedWidth = cardHeight * originalAspect;
+      offsetY = 0;
+      offsetX = (cardWidth - renderedWidth) / 2;
     }
 
-    return CustomPaint(
-      painter: DetectionOverlayPainter(
-        foods: foods,
-        originalWidth: originalWidth,
-        originalHeight: originalHeight,
-        renderedWidth: renderedWidth,
-        renderedHeight: renderedHeight,
-        offsetX: offsetX,
-        offsetY: offsetY,
+    return Container(
+      width: cardWidth,
+      height: cardHeight,
+      child: CustomPaint(
+        painter: DetectionOverlayPainter(
+          foods: foods,
+          originalWidth: originalWidth,
+          originalHeight: originalHeight,
+          renderedWidth: renderedWidth,
+          renderedHeight: renderedHeight,
+          offsetX: offsetX,
+          offsetY: offsetY,
+        ),
+        size: Size(cardWidth, cardHeight),
       ),
-      size: Size(displayWidth, displayHeight),
     );
   }
 
@@ -3083,44 +3198,109 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   Widget _buildErrorState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.error_outline, size: 64, color: Colors.green[300]),
-            const SizedBox(height: 16),
-            const Text(
-              'Oops! Something went wrong',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _errorMessage ?? 'Unknown error occurred',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
+    // Check if this is a "no food detected" error for better UX
+    final isNoFoodError = _errorMessage?.toLowerCase().contains('no food') ?? false;
+
+    return Container(
+      color: const Color(0xFFF5F7FA),
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Different icon for no-food vs error
+                Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: isNoFoodError
+                        ? Colors.orange.withOpacity(0.1)
+                        : Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Icon(
+                    isNoFoodError ? Icons.no_meals : Icons.error_outline,
+                    size: 64,
+                    color: isNoFoodError ? Colors.orange[400] : Colors.red[300],
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 12,
+                const SizedBox(height: 24),
+                Text(
+                  isNoFoodError ? 'No Food Detected' : 'Oops! Something went wrong',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1A2E),
+                  ),
                 ),
-              ),
-              child: const Text('Go Back'),
+                const SizedBox(height: 12),
+                Text(
+                  _errorMessage ?? 'Unknown error occurred',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Colors.grey[600],
+                    height: 1.5,
+                  ),
+                ),
+                if (isNoFoodError) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.lightbulb, color: Colors.blue[600], size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Tips for better results:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: Colors.blue[700],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '• Take photo from above (top-down view)\n'
+                          '• Ensure good lighting on the food\n'
+                          '• Keep the plate centered in frame\n'
+                          '• Avoid blurry or dark images',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.blue[600],
+                            height: 1.6,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 32),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Go Back'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isNoFoodError ? Colors.orange : Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
