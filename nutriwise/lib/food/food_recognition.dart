@@ -22,14 +22,25 @@ import 'package:nutriwise/services/food_collections.dart';
 // Configuration Constants (replaces hardcoded values)
 // ============================================================================
 
+// --- CALIBRATED CONFIDENCE POLICY ---
+// We use different thresholds for different purposes to maintain UI consistency
+// while having strict acceptance criteria.
+
 /// Segmentation confidence threshold (0.0 to 1.0)
 const double kSegmentationConfidenceThreshold = 0.3;
 
 /// Minimum component area as percentage of image (0.0 to 1.0)
 const double kMinComponentAreaPercentage = 0.01;
 
-/// Classification confidence threshold (0.0 to 1.0)
-const double kClassificationConfidenceThreshold = 0.05;
+/// Classification confidence threshold for weak predictions (0.0 to 1.0)
+const double kClassificationConfidenceThreshold = 0.15;
+
+/// High confidence threshold - predictions above this are considered "strong"
+/// and should not be overridden by ensemble without very strong multi-model evidence
+const double kHighConfidenceThreshold = 0.85;
+
+/// Minimum confidence for auto-acceptance without review (badges, summaries)
+const double kAutoAcceptanceThreshold = 0.70;
 
 /// Maximum number of food items to detect per image
 const int kMaxFoodItems = 5;
@@ -125,6 +136,22 @@ class SegmentedFood {
           .round(),
       'fat': ((macrosPer100g!['fat'] ?? 0) * gramsAmount / 100.0).round(),
     };
+  }
+
+  /// Calculate the actual foreground area from the binary mask (in pixels)
+  /// This is more accurate than bounding box area for portion estimation
+  int getMaskForegroundArea() {
+    if (mask.isEmpty) return 0;
+    int count = 0;
+    for (final pixel in mask) {
+      if (pixel > 0) count++;
+    }
+    return count;
+  }
+
+  /// Get bounding box area in pixels (for comparison with mask area)
+  int getBoundingBoxArea() {
+    return (boundingBox.width * boundingBox.height).round();
   }
 
   /// Get cropped image from original image using the mask
@@ -443,86 +470,45 @@ class NutritionService {
       return await _tryAlternativeSearch(foodName, cacheKey);
     } catch (e) {
       print('Error fetching nutrition from API: $e');
-      // Return default values on error
-      final defaultData = NutritionData.defaultValues();
-      _cache[cacheKey] = defaultData;
-      return defaultData;
+      // Return estimated values on error (not verified data)
+      final estimatedData = NutritionData(
+        caloriesPer100g: 150,
+        macrosPer100g: {'carbs': 30, 'protein': 10, 'fat': 5},
+        source: 'Estimated',
+      );
+      _cache[cacheKey] = estimatedData;
+      return estimatedData;
     }
   }
 
-  /// Try alternative search methods
+  /// FIXED: Try alternative search methods
+  /// Only Open Food Facts is used as live fallback; USDA removed (not properly wired)
+  /// Fallback/default data is explicitly marked as 'estimated'
   Future<NutritionData> _tryAlternativeSearch(
     String foodName,
     String cacheKey,
   ) async {
     try {
-      // Try searching with simplified name
+      // Try searching with simplified name (e.g., remove cooking method prefixes)
       final simplifiedName = _simplifyFoodName(foodName);
       if (simplifiedName != foodName.toLowerCase()) {
         return await fetchNutrition(simplifiedName);
-      }
-
-      // Try USDA FoodData Central (free, no API key for basic search)
-      // Note: This is a fallback, Open Food Facts is primary
-      final usdaUrl = Uri.parse(
-        'https://api.nal.usda.gov/fdc/v1/foods/search?'
-        'query=${Uri.encodeComponent(foodName)}&'
-        'pageSize=1',
-      );
-
-      final response = await http
-          .get(usdaUrl)
-          .timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['foods'] != null && (data['foods'] as List).isNotEmpty) {
-          final food = (data['foods'] as List)[0];
-          final nutrients = food['foodNutrients'] as List?;
-
-          if (nutrients != null) {
-            int calories = 0;
-            double carbs = 0;
-            double protein = 0;
-            double fat = 0;
-
-            for (var nutrient in nutrients) {
-              final nutrientId = nutrient['nutrientId'];
-              final value = nutrient['value']?.toDouble() ?? 0.0;
-
-              // USDA nutrient IDs
-              if (nutrientId == 1008) calories = value.round(); // Energy (kcal)
-              if (nutrientId == 1005) carbs = value; // Carbohydrate
-              if (nutrientId == 1003) protein = value; // Protein
-              if (nutrientId == 1004) fat = value; // Fat
-            }
-
-            final nutrition = NutritionData(
-              caloriesPer100g: calories,
-              macrosPer100g: {
-                'carbs': carbs.round(),
-                'protein': protein.round(),
-                'fat': fat.round(),
-              },
-              source: 'USDA FoodData',
-            );
-
-            _cache[cacheKey] = nutrition;
-            await _saveToPersistentCache(foodName, nutrition);
-            print('✓ Found nutrition data from USDA: $calories kcal/100g');
-            return nutrition;
-          }
-        }
       }
     } catch (e) {
       print('Alternative search failed: $e');
     }
 
-    // Return default if all searches fail
-    final defaultData = NutritionData.defaultValues();
-    _cache[cacheKey] = defaultData;
-    // Don't save defaults to persistent cache (they're not real data)
-    return defaultData;
+    // Return estimated default values if all searches fail
+    // Marked as 'estimated' to indicate this is not verified nutrition data
+    final estimatedData = NutritionData(
+      caloriesPer100g: 150,
+      macrosPer100g: {'carbs': 30, 'protein': 10, 'fat': 5},
+      source: 'Estimated',
+    );
+    _cache[cacheKey] = estimatedData;
+    // Don't save estimated data to persistent cache (it's not real data)
+    print('⚠ Using estimated nutrition for: $foodName');
+    return estimatedData;
   }
 
   /// Clean food name for API search
@@ -641,9 +627,6 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   List<SegmentedFood> get _mealSummaryDisplayFoods => _mealSummaryDisplayIndices
       .map((index) => _segmentedFoods[index])
       .toList();
-
-  int get _hiddenFoodCount =>
-      _segmentedFoods.length - _mealSummaryDisplayIndices.length;
 
   @override
   void initState() {
@@ -1180,6 +1163,10 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         _createFallbackSegment();
       } else {
         print('Created ${_segmentedFoods.length} segmented food regions');
+
+        // FIXED: Merge duplicate detections before proceeding
+        _segmentedFoods = _mergeDuplicateDetections(_segmentedFoods);
+
         // Emit final update
         if (!_detectionStreamController.isClosed) {
           _detectionStreamController.add(List.from(_segmentedFoods));
@@ -1272,6 +1259,155 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       ),
     ];
     print('Created fallback segment');
+  }
+
+  /// FIXED: Merge duplicate or overlapping detections of the same food
+  /// Detects when the same food appears multiple times and merges them
+  List<SegmentedFood> _mergeDuplicateDetections(List<SegmentedFood> foods) {
+    if (foods.length < 2) return foods;
+
+    print('Checking for duplicate detections...');
+    final merged = <SegmentedFood>[];
+    final mergedIndices = <int>{};
+
+    for (int i = 0; i < foods.length; i++) {
+      if (mergedIndices.contains(i)) continue;
+
+      final food1 = foods[i];
+      final duplicates = <int>[i];
+
+      for (int j = i + 1; j < foods.length; j++) {
+        if (mergedIndices.contains(j)) continue;
+
+        final food2 = foods[j];
+
+        // Check if same food name (case-insensitive)
+        final sameName = food1.foodName != null &&
+            food2.foodName != null &&
+            food1.foodName!.toLowerCase().trim() ==
+                food2.foodName!.toLowerCase().trim();
+
+        if (!sameName) continue;
+
+        // Check for significant overlap using bounding box intersection
+        final intersection = food1.boundingBox.intersect(food2.boundingBox);
+        final intersectionArea =
+            intersection.width * intersection.height;
+        final area1 = food1.boundingBox.width * food1.boundingBox.height;
+        final area2 = food2.boundingBox.width * food2.boundingBox.height;
+        final minArea = math.min(area1, area2);
+
+        // Merge if overlap > 30% of smaller box OR centers are very close
+        final overlapRatio = minArea > 0 ? intersectionArea / minArea : 0;
+
+        // Also check center proximity
+        final centerDistance = (food1.center != null && food2.center != null)
+            ? (food1.center! - food2.center!).distance
+            : double.infinity;
+        final avgDimension = (math.sqrt(area1) + math.sqrt(area2)) / 2;
+        final closeCenters = centerDistance < avgDimension * 0.5;
+
+        if (overlapRatio > 0.30 || closeCenters) {
+          duplicates.add(j);
+          mergedIndices.add(j);
+          print(
+            '  Found duplicate: ${food1.foodName} (overlap: ${(overlapRatio * 100).toStringAsFixed(1)}%, '
+            'center distance: ${centerDistance.toStringAsFixed(1)})',
+          );
+        }
+      }
+
+      if (duplicates.length > 1) {
+        // Merge all duplicates into one
+        merged.add(_combineFoods(duplicates.map((idx) => foods[idx]).toList()));
+      } else {
+        merged.add(food1);
+      }
+    }
+
+    if (merged.length < foods.length) {
+      print('Merged ${foods.length - merged.length} duplicate detections');
+    }
+
+    return merged;
+  }
+
+  /// Combine multiple food detections into one (union of masks, avg confidence)
+  SegmentedFood _combineFoods(List<SegmentedFood> foods) {
+    if (foods.isEmpty) throw ArgumentError('Cannot combine empty list');
+    if (foods.length == 1) return foods[0];
+
+    final base = foods[0];
+
+    // Find union of all bounding boxes
+    double minX = base.boundingBox.left;
+    double minY = base.boundingBox.top;
+    double maxX = base.boundingBox.right;
+    double maxY = base.boundingBox.bottom;
+
+    for (final food in foods.skip(1)) {
+      minX = math.min(minX, food.boundingBox.left);
+      minY = math.min(minY, food.boundingBox.top);
+      maxX = math.max(maxX, food.boundingBox.right);
+      maxY = math.max(maxY, food.boundingBox.bottom);
+    }
+
+    final mergedBox = Rect.fromLTRB(minX, minY, maxX, maxY);
+
+    // Create combined mask (use largest dimensions for simplicity)
+    final maxWidth = foods.map((f) => f.maskWidth).reduce(math.max);
+    final maxHeight = foods.map((f) => f.maskHeight).reduce(math.max);
+    final mergedMask = Uint8List(maxWidth * maxHeight);
+
+    // Union all masks
+    for (final food in foods) {
+      for (int y = 0; y < food.maskHeight; y++) {
+        for (int x = 0; x < food.maskWidth; x++) {
+          final idx = y * food.maskWidth + x;
+          if (idx < food.mask.length && food.mask[idx] > 0) {
+            // Scale coordinates to merged mask
+            final scaledX = ((x / food.maskWidth) * maxWidth).round().clamp(
+              0,
+              maxWidth - 1,
+            );
+            final scaledY = ((y / food.maskHeight) * maxHeight).round().clamp(
+              0,
+              maxHeight - 1,
+            );
+            final newIdx = scaledY * maxWidth + scaledX;
+            if (newIdx >= 0 && newIdx < mergedMask.length) {
+              mergedMask[newIdx] = 255;
+            }
+          }
+        }
+      }
+    }
+
+    // Average confidence, keep max
+    final avgConfidence = foods.map((f) => f.confidence).reduce((a, b) => a + b) /
+        foods.length;
+    final maxConfidence = foods.map((f) => f.confidence).reduce(math.max);
+
+    // Use higher confidence for the merged result
+    final finalConfidence = math.max(avgConfidence, maxConfidence * 0.95);
+
+    return SegmentedFood(
+      id: base.id, // Keep first ID
+      boundingBox: mergedBox,
+      mask: mergedMask,
+      maskWidth: maxWidth,
+      maskHeight: maxHeight,
+      confidence: finalConfidence.clamp(0.0, 1.0),
+      foodName: base.foodName,
+      segmentationSource: base.segmentationSource,
+      caloriesPer100g: base.caloriesPer100g,
+      macrosPer100g: base.macrosPer100g,
+      center: Offset(
+        (mergedBox.left + mergedBox.right) / 2,
+        (mergedBox.top + mergedBox.bottom) / 2,
+      ),
+      gramsAmount: foods.fold<int>(0, (sum, f) => sum + f.gramsAmount),
+    );
   }
 
   // Continue to batch 3...
@@ -1491,15 +1627,16 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     }
   }
 
-  /// IMPROVED: Ensemble voting with weighted averaging for better accuracy
-  /// Uses voting from all models and normalizes confidence scores
+  /// FIXED: Ensemble voting with high-confidence protection
+  /// High-confidence segmentation predictions (>85%) are protected from being overridden
+  /// by lower-confidence ensemble results unless there's very strong multi-model evidence
   Future<void> _assignPredictionsToSegments() async {
     if (_segmentedFoods.isEmpty) {
       print('No segments to assign predictions to');
       return;
     }
 
-    print('\n=== PREDICTION ASSIGNMENT (ENSEMBLE VOTING) ===');
+    print('\n=== PREDICTION ASSIGNMENT (ENSEMBLE WITH HIGH-CONFIDENCE PROTECTION) ===');
 
     for (int i = 0; i < _segmentedFoods.length; i++) {
       final segment = _segmentedFoods[i];
@@ -1507,21 +1644,24 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
       // Build list of all possible predictions for this segment
       List<FoodPrediction> candidatePredictions = [];
 
+      // Store the original segmentation prediction for comparison
+      FoodPrediction? segmentationPrediction;
+
       // 1. Add segmentation prediction with normalized confidence
       if (segment.foodName != null && segment.foodName!.isNotEmpty) {
         // Get nutrition data (async)
         final calories = await _getCaloriesForFood(segment.foodName!);
         final macros = await _getMacrosForFood(segment.foodName!);
 
-        candidatePredictions.add(
-          FoodPrediction(
-            foodName: segment.foodName!,
-            confidence: _normalizeConfidence(segment.confidence, 'UEC UNET'),
-            caloriesPer100g: calories,
-            macrosPer100g: macros,
-            source: segment.segmentationSource ?? 'UEC UNET',
-          ),
+        segmentationPrediction = FoodPrediction(
+          foodName: segment.foodName!,
+          confidence: _normalizeConfidence(segment.confidence, 'UEC UNET'),
+          caloriesPer100g: calories,
+          macrosPer100g: macros,
+          source: segment.segmentationSource ?? 'UEC UNET',
         );
+
+        candidatePredictions.add(segmentationPrediction);
       }
 
       // 2. Add per-region predictions with normalized confidence
@@ -1542,7 +1682,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         );
       }
 
-      // 3. IMPROVED: Ensemble voting - aggregate predictions with same food name
+      // 3. FIXED: Ensemble voting - aggregate predictions with same food name
       final aggregatedPredictions = _aggregatePredictionsByFoodName(
         candidatePredictions,
       );
@@ -1552,9 +1692,47 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
         (a, b) => b.confidence.compareTo(a.confidence),
       );
 
-      // 5. Pick the best prediction (highest aggregated confidence)
+      // 5. FIXED: Pick the best prediction with high-confidence protection
       if (aggregatedPredictions.isNotEmpty) {
-        final bestPrediction = aggregatedPredictions[0];
+        FoodPrediction bestPrediction = aggregatedPredictions[0];
+
+        // Check if segmentation prediction has high confidence and should be protected
+        if (segmentationPrediction != null &&
+            segmentationPrediction.confidence >= kHighConfidenceThreshold) {
+          // Find the aggregated entry for the segmentation food
+          final segAggregated = aggregatedPredictions.firstWhere(
+            (p) => _normalizeFoodName(p.foodName) ==
+                _normalizeFoodName(segmentationPrediction!.foodName),
+            orElse: () => segmentationPrediction!,
+          );
+
+          // Check if there's a competing prediction that would override
+          if (bestPrediction.foodName.toLowerCase().trim() !=
+              segmentationPrediction.foodName.toLowerCase().trim()) {
+            // Competing prediction exists - check if it has strong multi-model evidence
+            final confidenceGap = bestPrediction.confidence - segAggregated.confidence;
+            final isMultiModel = bestPrediction.source.contains('Ensemble') ||
+                bestPrediction.source.contains('models');
+
+            // Only override high-confidence segmentation if:
+            // 1. Competing prediction has significant confidence margin (>= 0.15), AND
+            // 2. It has multi-model support (not just single model)
+            if (confidenceGap < 0.15 || !isMultiModel) {
+              // Protect the high-confidence segmentation prediction
+              print(
+                '  PROTECTED: ${segmentationPrediction.foodName} (${(segmentationPrediction.confidence * 100).toStringAsFixed(1)}%) '
+                'from override by ${bestPrediction.foodName} (${(bestPrediction.confidence * 100).toStringAsFixed(1)}%) '
+                '- insufficient multi-model evidence (gap: ${(confidenceGap * 100).toStringAsFixed(1)}%)',
+              );
+              bestPrediction = segAggregated;
+            } else {
+              print(
+                '  OVERRIDE: ${segmentationPrediction.foodName} overridden by ${bestPrediction.foodName} '
+                'due to strong multi-model evidence (gap: ${(confidenceGap * 100).toStringAsFixed(1)}%)',
+              );
+            }
+          }
+        }
 
         print('Segment ${i + 1}:');
         print(
@@ -1602,7 +1780,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   }
 
   /// Aggregate predictions with same food name using weighted voting
-  /// Combines multiple model predictions for the same food
+  /// FIXED: Now divides by total weight (not prediction count) and uses unique model sources for agreement bonus
   List<FoodPrediction> _aggregatePredictionsByFoodName(
     List<FoodPrediction> predictions,
   ) {
@@ -1619,29 +1797,50 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     grouped.forEach((normalizedName, preds) {
       if (preds.isEmpty) return;
 
-      // Weighted average confidence (more models = higher confidence)
-      double totalConfidence = 0.0;
-      int modelCount = 0;
+      // Model-specific weights
       final modelWeights = {
         'UEC UNET': 1.2, // Segmentation gets higher weight
         'Kenyan Food Model': 1.0,
         'Food101 Model': 1.0,
       };
 
+      // Calculate total weight and weighted confidence sum
+      double totalWeight = 0.0;
+      double weightedConfidenceSum = 0.0;
+      final Set<String> uniqueSources = {};
+
       for (final pred in preds) {
         final weight = modelWeights[pred.source] ?? 1.0;
-        totalConfidence += pred.confidence * weight;
-        modelCount++;
+        totalWeight += weight;
+        weightedConfidenceSum += pred.confidence * weight;
+        uniqueSources.add(pred.source);
       }
 
-      // Ensemble confidence: average + bonus for multiple models agreeing
-      final avgConfidence = totalConfidence / preds.length;
-      final agreementBonus = (modelCount > 1) ? 0.1 * (modelCount - 1) : 0.0;
-      final finalConfidence = (avgConfidence + agreementBonus).clamp(0.0, 1.0);
+      // FIXED: Divide by total weight (not prediction count)
+      final weightedAvgConfidence = totalWeight > 0
+          ? weightedConfidenceSum / totalWeight
+          : 0.0;
+
+      // FIXED: Agreement bonus from unique model sources only (not duplicate predictions)
+      final uniqueModelCount = uniqueSources.length;
+      final agreementBonus = (uniqueModelCount > 1)
+          ? 0.08 * (uniqueModelCount - 1) // Reduced from 0.1 to prevent over-boosting
+          : 0.0;
+
+      // Cap agreement bonus to prevent false certainty
+      final cappedAgreementBonus = agreementBonus.clamp(0.0, 0.15);
+
+      final finalConfidence = (weightedAvgConfidence + cappedAgreementBonus)
+          .clamp(0.0, 1.0);
 
       // Use nutrition from highest confidence prediction
       preds.sort((a, b) => b.confidence.compareTo(a.confidence));
       final bestPred = preds[0];
+
+      // Build source label showing unique models
+      final sourceLabel = uniqueSources.length > 1
+          ? 'Ensemble (${uniqueSources.length} unique models)'
+          : bestPred.source;
 
       aggregated.add(
         FoodPrediction(
@@ -1649,7 +1848,7 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           confidence: finalConfidence,
           caloriesPer100g: bestPred.caloriesPer100g,
           macrosPer100g: bestPred.macrosPer100g,
-          source: 'Ensemble (${preds.length} models)',
+          source: sourceLabel,
         ),
       );
     });
@@ -2252,24 +2451,29 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     print('=== PORTION SIZE ESTIMATION COMPLETE ===\n');
   }
 
-  /// Estimate grams based on bounding box area, food density, and plate reference
+  /// FIXED: Estimate grams based on actual mask foreground area (not bounding box)
+  /// Converts mask area to cm² before estimating grams for more stable portion sizes
   int estimatePortionSize(SegmentedFood food, {double? plateSizeCm}) {
-    // Calculate bounding box area in pixels
-    final area = food.boundingBox.width * food.boundingBox.height;
+    // FIXED: Use actual mask foreground area instead of bounding box area
+    final maskPixelArea = food.getMaskForegroundArea().toDouble();
 
-    // Get food density (grams per square pixel, adjusted for typical serving)
+    // Fallback to bounding box if mask is empty (shouldn't happen normally)
+    final area = maskPixelArea > 0
+        ? maskPixelArea
+        : food.boundingBox.width * food.boundingBox.height;
+
+    // Get food density (grams per square cm, not per pixel)
     final density = _getFoodDensity(food.foodName ?? 'Unknown');
 
-    // Scale factor: convert pixel area to real-world area
+    // Scale factor: convert pixel area to real-world cm² area
     // Assumes average phone camera: ~2000px width = ~20cm plate
-    // This is a rough estimate and can be improved with plate detection
     final imageWidth = _processedImage?.width.toDouble() ?? 512.0;
     final imageHeight = _processedImage?.height.toDouble() ?? 512.0;
 
     // Validate image dimensions
     if (imageWidth <= 0 || imageHeight <= 0) {
       print('Warning: Invalid image dimensions for portion estimation');
-      return kMinPortionGrams; // Return minimum as fallback
+      return kMinPortionGrams;
     }
 
     final imageArea = imageWidth * imageHeight;
@@ -2541,66 +2745,192 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     return _buildProcessingPreview();
   }
 
-  /// IMPROVED: Show what AI is detecting in real-time
+  /// ENHANCED: Modern, polished processing UI with better UX
+  /// - Contained image preview (not full-screen zoomed)
+  /// - Animated stage indicators with icons
+  /// - Visual progress feedback
+  /// - Real-time detection count with smooth transitions
   Widget _buildProcessingPreview() {
-    return Stack(
-      children: [
-        // Blurred background image
-        if (_imageFile != null)
-          ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-            child: Image.file(
-              _imageFile!,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
+    return Container(
+      color: const Color(0xFFF5F7FA), // Soft light gray background
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.auto_awesome,
+                      color: Colors.green,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'AI Food Analysis',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A1A2E),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        // Real-time detection preview
-        StreamBuilder<List<SegmentedFood>>(
-          stream: detectionStream,
-          builder: (context, snapshot) {
-            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-              return _buildDetectionOverlay(snapshot.data!);
-            }
-            return Container();
-          },
-        ),
-        // Processing overlay with progress
-        Container(
-          color: Colors.black.withOpacity(0.4),
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildProcessingStage(),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: 200,
-                  child: LinearProgressIndicator(value: _processingProgress),
-                ),
-                const SizedBox(height: 16),
-                StreamBuilder<List<SegmentedFood>>(
-                  stream: detectionStream,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                      return Text(
-                        'Found ${snapshot.data!.length} food${snapshot.data!.length > 1 ? 's' : ''}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
+
+            // Image preview card - properly sized, not zoomed
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 20,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Image with subtle blur - contained within bounds
+                        if (_imageFile != null)
+                          ImageFiltered(
+                            imageFilter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+                            child: Image.file(
+                              _imageFile!,
+                              fit: BoxFit.contain, // Changed from cover to contain
+                              width: double.infinity,
+                              height: double.infinity,
+                            ),
+                          ),
+                        // Real-time detection overlay
+                        StreamBuilder<List<SegmentedFood>>(
+                          stream: detectionStream,
+                          builder: (context, snapshot) {
+                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                              return _buildDetectionOverlay(snapshot.data!);
+                            }
+                            return Container();
+                          },
                         ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
+                        // Subtle gradient overlay for depth
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.1),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ],
+              ),
             ),
-          ),
+
+            // Processing status card
+            Expanded(
+              flex: 2,
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Animated stage indicator with icons
+                    _buildEnhancedProcessingStage(),
+                    const SizedBox(height: 24),
+                    // Modern progress indicator
+                    _buildModernProgressIndicator(),
+                    const SizedBox(height: 20),
+                    // Detection count with animation
+                    StreamBuilder<List<SegmentedFood>>(
+                      stream: detectionStream,
+                      builder: (context, snapshot) {
+                        final count = snapshot.data?.length ?? 0;
+                        return AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 300),
+                          child: count > 0
+                              ? Container(
+                                  key: ValueKey<int>(count),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.restaurant,
+                                        color: Colors.green[700],
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Found $count food${count > 1 ? 's' : ''}',
+                                        style: TextStyle(
+                                          color: Colors.green[700],
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : const Text(
+                                  'Scanning your plate...',
+                                  style: TextStyle(
+                                    color: Color(0xFF6B7280),
+                                    fontSize: 14,
+                                  ),
+                                ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -2647,16 +2977,108 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
   }
 
-  Widget _buildProcessingStage() {
+  /// ENHANCED: Modern animated stage indicator with icons
+  Widget _buildEnhancedProcessingStage() {
     final stages = [
-      'Loading models',
-      'Analyzing image',
-      'Detecting foods',
-      'Calculating nutrition',
+      {'text': 'Loading AI models', 'icon': Icons.memory},
+      {'text': 'Analyzing image', 'icon': Icons.image_search},
+      {'text': 'Detecting foods', 'icon': Icons.restaurant_menu},
+      {'text': 'Calculating nutrition', 'icon': Icons.calculate},
     ];
-    return Text(
-      stages[_currentStage.clamp(0, stages.length - 1)],
-      style: const TextStyle(color: Colors.white, fontSize: 16),
+
+    final currentStageIndex = _currentStage.clamp(0, stages.length - 1);
+
+    return Column(
+      children: [
+        // Stage icons row
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: stages.asMap().entries.map((entry) {
+            final index = entry.key;
+            final stage = entry.value;
+            final isActive = index <= currentStageIndex;
+            final isCurrent = index == currentStageIndex;
+
+            return Row(
+              children: [
+                // Stage icon
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  width: isCurrent ? 44 : 36,
+                  height: isCurrent ? 44 : 36,
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? Colors.green.withOpacity(isCurrent ? 1.0 : 0.3)
+                        : Colors.grey[200],
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: isCurrent
+                        ? [
+                            BoxShadow(
+                              color: Colors.green.withOpacity(0.3),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Icon(
+                    stage['icon'] as IconData,
+                    color: isActive ? Colors.white : Colors.grey[400],
+                    size: isCurrent ? 22 : 18,
+                  ),
+                ),
+                // Connector line (except after last)
+                if (index < stages.length - 1)
+                  Container(
+                    width: 24,
+                    height: 2,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    color: index < currentStageIndex
+                        ? Colors.green
+                        : Colors.grey[200],
+                  ),
+              ],
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 16),
+        // Current stage text with pulse animation
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          child: Text(
+            stages[currentStageIndex]['text'] as String,
+            key: ValueKey<int>(currentStageIndex),
+            style: const TextStyle(
+              color: Color(0xFF1A1A2E),
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Modern progress indicator with gradient
+  Widget _buildModernProgressIndicator() {
+    return Container(
+      height: 8,
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: FractionallySizedBox(
+        alignment: Alignment.centerLeft,
+        widthFactor: _processingProgress.clamp(0.0, 1.0),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Colors.green, Color(0xFF4CAF50)],
+            ),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      ),
     );
   }
 
@@ -3364,11 +3786,14 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
   // BATCH 7: Modify Food Section with Cropped/Highlighted Images
   // ============================================================================
 
+  /// FIXED: Now shows ALL detected foods in edit/modify flows (not filtered by confidence)
+  /// Low-confidence items are labeled as "Review suggested" instead of being hidden
   Widget _buildModifyFoodSection() {
-    final displayIndices = _mealSummaryDisplayIndices;
-    final displayFoods = displayIndices
-        .map((idx) => _segmentedFoods[idx])
-        .toList();
+    // Use ALL segmented foods as the single source of truth for modify flow
+    final allFoods = _segmentedFoods;
+    final lowConfidenceCount = allFoods.where(
+      (f) => f.confidence < kAutoAcceptanceThreshold,
+    ).length;
 
     return Container(
       margin: const EdgeInsets.all(16),
@@ -3389,12 +3814,20 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                       color: Colors.black87,
                     ),
                   ),
+                  // Show count of all detected foods
+                  Text(
+                    '${allFoods.length} item${allFoods.length == 1 ? '' : 's'} detected${lowConfidenceCount > 0 ? ' • $lowConfidenceCount review suggested' : ''}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: lowConfidenceCount > 0 ? Colors.orange[600] : Colors.grey[600],
+                    ),
+                  ),
                 ],
               ),
-              // Merge action button
+              // Merge action button - uses all foods now
               Row(
                 children: [
-                  if (displayFoods.length >= 2)
+                  if (allFoods.length >= 2)
                     IconButton(
                       icon: const Icon(Icons.merge_type, color: Colors.blue),
                       tooltip: 'Merge Foods',
@@ -3405,34 +3838,19 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
             ],
           ),
           const SizedBox(height: 16),
-          if (_hiddenFoodCount > 0)
-            if (displayFoods.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  'No foods above 55% confidence to display.',
-                  style: TextStyle(fontSize: 13, color: Colors.black54),
-                ),
-              ),
           SizedBox(
             height: 200,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              itemCount: 1 + displayFoods.length, // Add button + foods
+              itemCount: 1 + allFoods.length, // Add button + all foods
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return _buildAddFoodButton();
                 } else {
-                  final displayListIndex = index - 1;
-                  final originalIndex = displayIndices[displayListIndex];
+                  final foodIndex = index - 1;
                   return _buildFoodCard(
-                    _segmentedFoods[originalIndex],
-                    originalIndex,
+                    allFoods[foodIndex],
+                    foodIndex,
                   );
                 }
               },
@@ -3478,12 +3896,15 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
   }
 
-  /// IMPROVED: Now shows CROPPED and HIGHLIGHTED image of individual food region
+  /// FIXED: Now shows CROPPED and HIGHLIGHTED image of individual food region
+  /// Adds 'Review suggested' label for low-confidence AI detections
   Widget _buildFoodCard(SegmentedFood food, int index) {
     // Calculate actual calories based on grams
     final displayCalories = food.actualCalories;
     final isSourceAdded = _isSourceAddedFood(food);
     final sourceLabel = _displaySourceLabel(food);
+    // Show "Review suggested" for AI-detected low-confidence foods
+    final needsReview = !isSourceAdded && food.confidence < kAutoAcceptanceThreshold;
 
     // Get cropped/highlighted image for this food
     Widget foodImage;
@@ -3645,12 +4066,14 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
                       style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                     ),
                     Text(
-                      sourceLabel,
+                      needsReview ? 'Review suggested' : sourceLabel,
                       style: TextStyle(
                         fontSize: 10,
-                        color: isSourceAdded
-                            ? Colors.blueGrey[700]
-                            : Colors.grey[500],
+                        color: needsReview
+                            ? Colors.orange[600]
+                            : isSourceAdded
+                                ? Colors.blueGrey[700]
+                                : Colors.grey[500],
                         fontWeight: FontWeight.w500,
                       ),
                       maxLines: 1,
@@ -3674,23 +4097,27 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
   }
 
+  /// FIXED: Only uses per-region predictions for this specific food region
+  /// Does NOT include global predictions that caused extra candidates to appear
   void _showEditFoodDialog(SegmentedFood food, int index) {
-    // Combine per-region predictions (more relevant) with global predictions
+    // FIXED: Only use per-region predictions for this specific food region
+    // This ensures the modify list reflects actual detected segmented foods only
     final combinedPredictions = <FoodPrediction>[];
 
-    // Prioritize per-region predictions (more accurate for this specific region)
+    // Use only per-region predictions (more accurate for this specific region)
     if (food.perRegionPredictions.isNotEmpty) {
       combinedPredictions.addAll(food.perRegionPredictions);
-    }
-
-    // Add global predictions (avoid duplicates)
-    final existingNames = combinedPredictions
-        .map((p) => p.foodName.toLowerCase())
-        .toSet();
-    for (final pred in _topPredictions) {
-      if (!existingNames.contains(pred.foodName.toLowerCase())) {
-        combinedPredictions.add(pred);
-      }
+    } else {
+      // Fallback: create a prediction from the current food data if no per-region preds
+      combinedPredictions.add(
+        FoodPrediction(
+          foodName: food.foodName ?? 'Unknown',
+          confidence: food.confidence,
+          caloriesPer100g: food.caloriesPer100g ?? 150,
+          macrosPer100g: food.macrosPer100g ?? {'carbs': 30, 'protein': 10, 'fat': 5},
+          source: food.classificationSource ?? 'AI Detection',
+        ),
+      );
     }
 
     // Sort by confidence
@@ -4278,16 +4705,17 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     _updateAnimations();
   }
 
-  /// Show merge dialog
+  /// FIXED: Show merge dialog using ALL detected foods (not filtered by confidence)
   void _showMergeDialog() {
-    final displayIndices = _mealSummaryDisplayIndices;
+    // Use all segmented foods as single source of truth
+    final allIndices = List<int>.generate(_segmentedFoods.length, (i) => i);
 
-    if (displayIndices.length < 2) {
+    if (allIndices.length < 2) {
       if (mounted) {
         try {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Need at least two foods above 55% confidence.'),
+              content: Text('Need at least two foods to merge.'),
             ),
           );
         } catch (e) {
@@ -4305,15 +4733,21 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: displayIndices.length,
+            itemCount: allIndices.length,
             itemBuilder: (context, index) {
-              final food = _segmentedFoods[displayIndices[index]];
+              final food = _segmentedFoods[allIndices[index]];
+              final needsReview = food.confidence < kAutoAcceptanceThreshold;
               return ListTile(
                 title: Text(food.foodName ?? 'Food ${index + 1}'),
-                subtitle: Text('${food.gramsAmount}g'),
+                subtitle: Text(
+                  '${food.gramsAmount}g${needsReview ? ' • Review suggested' : ''}',
+                  style: TextStyle(
+                    color: needsReview ? Colors.orange[600] : null,
+                  ),
+                ),
                 onTap: () {
                   Navigator.pop(context);
-                  _showMergeSelectionDialog(displayIndices[index]);
+                  _showMergeSelectionDialog(allIndices[index]);
                 },
               );
             },
@@ -4329,9 +4763,11 @@ class _FoodRecognitionPageState extends State<FoodRecognitionPage>
     );
   }
 
+  /// FIXED: Show merge selection dialog using ALL detected foods
   void _showMergeSelectionDialog(int firstIndex) {
-    final displayIndices = _mealSummaryDisplayIndices;
-    final remainingIndices = displayIndices
+    // Use all segmented foods as single source of truth
+    final allIndices = List<int>.generate(_segmentedFoods.length, (i) => i);
+    final remainingIndices = allIndices
         .where((index) => index != firstIndex)
         .toList();
     final firstName = _segmentedFoods[firstIndex].foodName ?? 'Food';
